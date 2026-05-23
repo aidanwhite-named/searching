@@ -7,7 +7,7 @@ import json
 import os
 import re
 import urllib.request
-from src.search_clients import SearchResult
+from providers.base_provider import SearchResult
 
 
 class DocumentCache:

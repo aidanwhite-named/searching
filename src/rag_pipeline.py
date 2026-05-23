@@ -4,12 +4,13 @@ from src.chunker import Chunk, Chunker
 from src.embedder import Embedder
 from src.vector_store import VectorStore
 from src.document_cache import DocumentCache
+from src.reranker import Reranker
 
 
 @dataclass
 class ChunkResult:
     chunk: Chunk
-    score: float    # 코사인 유사도 (0~1)
+    score: float    # Reranked score (0~1)
 
 
 @dataclass
@@ -21,15 +22,16 @@ class RAGClaimResult:
 class RAGPipeline:
     def __init__(self, config: ConfigManager):
         self._cfg = config
-        self._embedder = Embedder(config.get("rag", "embedding_model"))
+        self._embedder = Embedder(config.get("rag", "embedding_model", default="BAAI/bge-m3"))
         self._store = VectorStore(
-            backend=config.get("rag", "vector_db"),
+            backend=config.get("rag", "vector_db", default="qdrant"),
             dimension=self._embedder.dimension,
         )
         self._chunker = Chunker(
-            chunk_size=config.get("rag", "chunk_size"),
-            chunk_overlap=config.get("rag", "chunk_overlap"),
+            chunk_size=config.get("rag", "chunk_size", default=512),
+            chunk_overlap=config.get("rag", "chunk_overlap", default=64),
         )
+        self._reranker = Reranker(config.get("rag", "reranker_model", default="BAAI/bge-reranker-v2-m3"))
         self._cache = DocumentCache()
 
     def build_index(
@@ -40,42 +42,39 @@ class RAGPipeline:
         force_rebuild: bool = False,
     ) -> int:
         """
-        문서 로드 → 청킹 → 임베딩 → 벡터 DB 인덱싱.
-        반환: 인덱싱된 청크 수.
+        Build local vector database index by chunking search results and storing embeddings.
         """
         cache = cache or self._cache
 
-        # 기존 인덱스 로드 시도
+        # Qdrant client checks persistence and counts automatically
         if not force_rebuild and self._store.load(index_name):
             n = self._store.count()
-            print(f"[rag] 기존 인덱스 로드: {n}개 청크 ({index_name})")
+            print(f"[rag] Loaded existing vector index: {n} chunks")
             return n
 
-        print("[rag] 문서 청킹 중...")
+        print("[rag] Chunking documents using claim-based rules...")
         chunks = self._chunker.chunk_all(search_results, cache)
         if not chunks:
-            print("[rag] 청킹 결과 없음 — 인덱스 비어 있음")
+            print("[rag] No chunks produced — index is empty")
             return 0
 
-        print(f"[rag] {len(chunks)}개 청크 임베딩 중...")
+        print(f"[rag] Embedding {len(chunks)} chunks using multilingual BGE-M3 model...")
         texts = [c.text for c in chunks]
         embeddings = self._embedder.embed(texts)
 
-        print(f"[rag] 벡터 DB에 추가 중 ({self._cfg.get('rag', 'vector_db')})...")
+        print(f"[rag] Storing embedded chunks in Qdrant collection...")
         self._store.add(chunks, embeddings)
-        self._store.save(index_name)
-        print(f"[rag] 인덱스 구축 완료: {len(chunks)}개 청크")
+        print(f"[rag] Vector DB index constructed: {self._store.count()} chunks in total")
         return len(chunks)
 
     def search(
         self,
         claim_nodes: dict,
         target_claims: list,
-        top_k: int = 5,
+        top_k: int = 10,
     ) -> list:
         """
-        청구항 텍스트를 임베딩하여 벡터 DB에서 유사 청크 검색.
-        반환: list[RAGClaimResult]
+        Search vector store for chunks matching the claim text, retrieve top 50, rerank to top_k.
         """
         results = []
         for num in target_claims:
@@ -83,20 +82,28 @@ class RAGPipeline:
             if not node:
                 continue
 
+            # Dense vector query representation
             query_vec = self._embedder.embed_one(node.text)
-            hits = self._store.search(query_vec, k=top_k)
-            top_chunks = [ChunkResult(chunk=chunk, score=score) for chunk, score in hits]
+            
+            # Retrieve top 50 candidates from Qdrant
+            hits = self._store.search(query_vec, k=50)
+            
+            # Perform semantic reranking using bge-reranker-v2-m3 to get top_k (default 10)
+            reranked_hits = self._reranker.rerank(node.text, hits, top_k=top_k)
+            
+            top_chunks = [ChunkResult(chunk=chunk, score=score) for chunk, score in reranked_hits]
             results.append(RAGClaimResult(claim_number=num, top_chunks=top_chunks))
 
         return results
 
     def summary(self, rag_results: list) -> str:
-        lines = ["\n=== 2차 RAG 검색 결과 ==="]
+        """Generate a summary of the RAG search results for CLI feedback."""
+        lines = ["\n=== Reranked RAG Search Results ==="]
         for cr in rag_results:
-            lines.append(f"\n  청구항 {cr.claim_number} — 상위 {len(cr.top_chunks)}개 청크")
+            lines.append(f"\n  Claim {cr.claim_number} — top {len(cr.top_chunks)} chunks")
             for i, r in enumerate(cr.top_chunks, 1):
                 c = r.chunk
-                lines.append(f"    [{i}] score={r.score:.3f} | {c.source} | {c.pub_date}")
-                lines.append(f"        제목: {c.title[:50]}")
-                lines.append(f"        본문: {c.text[:120].replace(chr(10), ' ')}...")
+                lines.append(f"    [{i}] score={r.score:.3f} | {c.source} | {c.pub_date} | type={c.chunk_type}")
+                lines.append(f"        Title: {c.title[:50]}")
+                lines.append(f"        Text: {c.text[:120].replace(chr(10), ' ')}...")
         return "\n".join(lines)

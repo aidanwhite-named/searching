@@ -1,18 +1,21 @@
-"""
-1차 검색 파이프라인: 쿼리 생성 → DB 검색 → 문서 캐시 저장.
-"""
-
+import os
+import dotenv
 from dataclasses import dataclass, field
 from src.config_manager import ConfigManager
 from src.llm_router import LLMRouter
 from src.claims_parser import ClaimNode
 from src.patent_preprocessor import PatentData
 from src.query_generator import QueryGenerator, QuerySpec
-from src.search_clients import SearchResult, build_clients
+from providers.base_provider import SearchResult
+from providers.kipris_provider import KiprisProvider
+from providers.epo_provider import EpoProvider
+from providers.openalex_provider import OpenAlexProvider
 from src.document_cache import DocumentCache
 
+# Load environment variables from .env if present
+dotenv.load_dotenv()
 
-_DEFAULT_DBS = ["kipris", "semantic_scholar", "uspto"]
+_DEFAULT_DBS = ["kipris", "epo", "openalex"]
 
 
 @dataclass
@@ -25,8 +28,19 @@ class ClaimSearchResults:
 class SearchPipeline:
     def __init__(self, router: LLMRouter, config: ConfigManager):
         self.generator = QueryGenerator(router)
-        self.clients = build_clients(config)
         self.cache = DocumentCache()
+        
+        # Load API keys from environment or fallback to config
+        kipris_key = os.getenv("KIPRIS_API_KEY", "") or config.get("search", "kipris_api_key", default="")
+        epo_key = os.getenv("EPO_OPS_KEY", "") or config.get("search", "epo_ops_key", default="")
+        epo_secret = os.getenv("EPO_OPS_SECRET", "") or config.get("search", "epo_ops_secret", default="")
+        openalex_email = os.getenv("OPENALEX_EMAIL", "") or config.get("search", "openalex_email", default="")
+        
+        self.providers = {
+            "kipris": KiprisProvider(api_key=kipris_key),
+            "epo": EpoProvider(key=epo_key, secret=epo_secret),
+            "openalex": OpenAlexProvider(email=openalex_email)
+        }
 
     def run(
         self,
@@ -37,9 +51,7 @@ class SearchPipeline:
         max_per_db: int = 10,
     ) -> list:
         """
-        target_claims: None이면 독립항 전체
-        databases: None이면 _DEFAULT_DBS
-        반환: list[ClaimSearchResults]
+        Run search query generation and retrieve results from external databases.
         """
         dbs = databases or _DEFAULT_DBS
         cutoff = patent_data.reference_date
@@ -51,24 +63,38 @@ class SearchPipeline:
         for num in target_claims:
             node = claim_nodes.get(num)
             if not node:
-                print(f"[search] 청구항 {num} 없음 — skip")
+                print(f"[search] Claim {num} not found — skipping.")
                 continue
 
-            print(f"\n[search] 청구항 {num} 쿼리 생성 중...")
+            print(f"\n[search] Generating query for Claim {num}...")
             query = self.generator.generate(num, node.text, cutoff)
-            print(f"  키워드: {query.keywords}")
-            print(f"  CPC: {query.cpc_codes}")
-            print(f"  Boolean: {query.boolean_query[:80]}...")
+            print(f"  Keywords: {query.keywords}")
+            print(f"  CPC Codes: {query.cpc_codes}")
+            print(f"  Boolean Query: {query.boolean_query[:80]}...")
 
             found: list[SearchResult] = []
             for db in dbs:
-                client = self.clients.get(db)
-                if not client:
-                    print(f"[search] 알 수 없는 DB: {db} — skip")
+                provider = self.providers.get(db)
+                if not provider:
+                    print(f"[search] Unknown provider: {db} — skipping.")
                     continue
-                print(f"  [{db}] 검색 중...", end=" ", flush=True)
-                hits = client.search(query, cutoff, max_per_db)
-                print(f"{len(hits)}건 발견")
+                    
+                print(f"  [{db}] Querying database...", end=" ", flush=True)
+                
+                # Format search query string depending on provider characteristics
+                if db == "kipris":
+                    # KIPRIS works best with boolean statements
+                    q_str = query.boolean_query or " AND ".join(query.keywords)
+                elif db == "epo":
+                    # EPO Published-data searches using CQL
+                    q_str = " AND ".join(query.keywords)
+                else:
+                    # OpenAlex handles simple keyword strings well
+                    q_str = " ".join(query.keywords)
+                    
+                hits = provider.search(q_str, cutoff, max_per_db)
+                print(f"{len(hits)} hits retrieved")
+                
                 for hit in hits:
                     hit = self.cache.fetch_and_store(hit)
                     found.append(hit)
@@ -82,18 +108,18 @@ class SearchPipeline:
         return all_results
 
     def summary(self, all_results: list) -> str:
-        """CLI 출력용 요약 문자열."""
-        lines = ["\n=== 1차 검색 결과 요약 ==="]
+        """Generate a summary of the search results for CLI feedback."""
+        lines = ["\n=== External search results ==="]
         for cr in all_results:
-            lines.append(f"\n  청구항 {cr.claim_number} — {len(cr.results)}건")
-            lines.append(f"  쿼리: {cr.query.boolean_query[:70]}...")
+            lines.append(f"\n  Claim {cr.claim_number} — {len(cr.results)} documents")
+            lines.append(f"  Query: {cr.query.boolean_query[:70]}...")
             by_src: dict[str, int] = {}
             for r in cr.results:
                 by_src[r.source] = by_src.get(r.source, 0) + 1
             for src, cnt in by_src.items():
-                lines.append(f"    · {src}: {cnt}건")
+                lines.append(f"    · {src}: {cnt} docs")
             if cr.results:
-                lines.append("  상위 3건:")
+                lines.append("  Top 3 hits:")
                 for r in cr.results[:3]:
                     lines.append(f"    [{r.pub_date}] {r.title[:60]}")
         return "\n".join(lines)

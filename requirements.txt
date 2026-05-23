@@ -9,13 +9,17 @@ openai>=1.50.0             # OpenAI API
 # Phase 2: PDF 전처리 & 청구항 파서
 opendataloader-pdf>=2.4.3  # Java CLI 래퍼, Java 설치 필요
 
-# Phase 3: 외부 DB 검색 (표준 라이브러리만 사용, 추가 설치 불필요)
-# urllib, xml.etree.ElementTree, json 사용
+# Phase 3: 외부 DB 검색
+python-dotenv>=1.0.0       # .env 파일 로드 (search_pipeline.py)
 
 # Phase 4: 로컬 RAG 파이프라인
 sentence-transformers>=5.5.0
-faiss-cpu>=1.9.0
-chromadb>=1.5.0
+qdrant-client>=1.7.0
 langchain-text-splitters>=0.3.0
 
 # Phase 5: 매칭 + 할루시네이션 검증 + 출력 (추가 의존성 없음)
+
+# Web Dashboard Interface
+fastapi>=0.100.0
+uvicorn>=0.22.0
+python-multipart>=0.0.6

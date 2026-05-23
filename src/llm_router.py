@@ -1,10 +1,12 @@
 import subprocess
+
 from src.config_manager import ConfigManager
 
 
 class LLMRouter:
-    # CLI fallback 명령 템플릿
+    # CLI fallback command templates.
     _CLI_COMMANDS = {
+        "codex": lambda p: ["codex", "-p", p],
         "claude": lambda p: ["claude", "-p", p],
         "gemini": lambda p: ["gemini", "-p", p],
         "openai": lambda p: ["gpt", p],
@@ -28,14 +30,12 @@ class LLMRouter:
         try:
             resp = self.call("Respond with the single word OK and nothing else.")
             ok = "OK" in resp
-            status = "성공" if ok else f"실패 (응답: {resp[:80]})"
-            print(f"[test] {self.agent} ({self.mode}) 연결 {status}")
+            status = "success" if ok else f"failed (response: {resp[:80]})"
+            print(f"[test] {self.agent} ({self.mode}) connection {status}")
             return ok
         except Exception as e:
-            print(f"[test] 연결 실패: {e}")
+            print(f"[test] connection failed: {e}")
             return False
-
-    # ── API 라우팅 ──────────────────────────────────────────────────────────────
 
     def _call_api(self, prompt: str, system: str, max_tokens: int) -> str:
         dispatch = {
@@ -45,7 +45,7 @@ class LLMRouter:
         }
         handler = dispatch.get(self.agent)
         if handler is None:
-            raise ValueError(f"지원하지 않는 에이전트: {self.agent}")
+            raise ValueError(f"API mode is not supported for agent: {self.agent}")
         return handler(prompt, system, max_tokens)
 
     def _claude_api(self, prompt: str, system: str, max_tokens: int) -> str:
@@ -95,12 +95,10 @@ class LLMRouter:
         )
         return response.choices[0].message.content
 
-    # ── CLI fallback ────────────────────────────────────────────────────────────
-
     def _call_cli(self, prompt: str) -> str:
         builder = self._CLI_COMMANDS.get(self.agent)
         if builder is None:
-            raise ValueError(f"CLI fallback 미지원 에이전트: {self.agent}")
+            raise ValueError(f"CLI fallback is not supported for agent: {self.agent}")
         cmd = builder(prompt)
         try:
             result = subprocess.run(
@@ -112,11 +110,10 @@ class LLMRouter:
             )
         except FileNotFoundError:
             raise FileNotFoundError(
-                f"CLI 도구 '{cmd[0]}'를 찾을 수 없습니다. "
-                f"설치 여부를 확인하거나 config에서 API 키를 입력하세요."
+                f"CLI tool '{cmd[0]}' was not found. Install it or enter an API key in config."
             )
         if result.returncode != 0:
             raise RuntimeError(
-                f"CLI fallback 오류 (종료코드 {result.returncode}):\n{result.stderr.strip()}"
+                f"CLI fallback error (exit code {result.returncode}):\n{result.stderr.strip()}"
             )
         return result.stdout.strip()

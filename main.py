@@ -150,7 +150,7 @@ def cmd_rag(args):
             # ClaimSearchResults 재구성
             from src.search_pipeline import ClaimSearchResults
             from src.query_generator import QuerySpec
-            from src.search_clients import SearchResult
+            from providers.base_provider import SearchResult
             search_results = []
             for item in raw:
                 q = item["query"]

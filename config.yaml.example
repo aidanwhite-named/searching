@@ -1,6 +1,6 @@
 llm:
-  agent: claude           # claude | gemini | openai
-  model: claude-opus-4-7
+  agent: codex            # codex | claude | gemini | openai
+  model: gpt-5-codex
   api_key: ""             # 비워두면 로컬 CLI fallback 사용
 
 search:
@@ -8,9 +8,9 @@ search:
   max_results: 20
 
 rag:
-  embedding_model: sentence-transformers/all-MiniLM-L6-v2
-  # 한국어 특허 권장: paraphrase-multilingual-MiniLM-L12-v2
-  vector_db: faiss        # faiss | chromadb
+  embedding_model: BAAI/bge-m3
+  # Qdrant local path or server URL can be customized in config.yaml
+  vector_db: qdrant
   chunk_size: 512
   chunk_overlap: 64
 

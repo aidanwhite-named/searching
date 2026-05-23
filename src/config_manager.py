@@ -3,8 +3,8 @@ import yaml
 
 DEFAULT_CONFIG = {
     "llm": {
-        "agent": "claude",
-        "model": "claude-opus-4-7",
+        "agent": "codex",
+        "model": "gpt-5-codex",
         "api_key": "",
     },
     "search": {
@@ -12,8 +12,8 @@ DEFAULT_CONFIG = {
         "max_results": 20,
     },
     "rag": {
-        "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-        "vector_db": "faiss",
+        "embedding_model": "BAAI/bge-m3",
+        "vector_db": "qdrant",
         "chunk_size": 512,
         "chunk_overlap": 64,
     },
@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
 }
 
 AGENT_DEFAULT_MODELS = {
+    "codex": "gpt-5-codex",
     "claude": "claude-opus-4-7",
     "gemini": "gemini-2.0-flash",
     "openai": "gpt-4o",
@@ -131,9 +132,9 @@ class ConfigManager:
 
         # 벡터 DB 선택
         current_vdb = self.get("rag", "vector_db")
-        print(f"벡터 DB [faiss|chromadb] (현재: {current_vdb}): ", end="")
+        print(f"벡터 DB [qdrant] (현재: {current_vdb}): ", end="")
         inp = input().strip().lower()
-        if inp in ("faiss", "chromadb"):
+        if inp == "qdrant":
             self.set("rag", "vector_db", value=inp)
 
         # 출력 형식

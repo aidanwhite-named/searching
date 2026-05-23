@@ -149,7 +149,7 @@ D:\Searching\
 ├── config.yaml.example        # 설정 예시
 ├── .env.example               # 환경변수 예시
 ├── requirements.txt
-├── AGENTS.md                  # Codex용 프로젝트 지시사항 (이 파일과 내용 동기화 필요)
+├── CLAUDE.md                  # Claude Code용 프로젝트 지시사항 (이 파일과 내용 동기화 필요)
 ├── providers/
 │   ├── base_provider.py       # BaseProvider ABC + SearchResult
 │   ├── kipris_provider.py     # KIPRIS (한국 특허)
@@ -214,4 +214,4 @@ python server.py  # http://127.0.0.1:8001
 * 벡터 DB는 Qdrant만 지원. FAISS/ChromaDB 코드는 없음
 * 웹 서버는 threading 방식으로 분석 작업 실행 (멀티 프로세스 아님)
 * `config_manager.py`의 `DEFAULT_CONFIG`는 `codex`를 기본 에이전트로 지정하지만, 실제 `config.yaml`은 `claude`로 설정됨
-* AGENTS.md (Codex용)와 이 파일의 내용을 함께 업데이트할 것
+* CLAUDE.md (Claude Code용)와 이 파일의 내용을 함께 업데이트할 것

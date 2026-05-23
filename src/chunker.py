@@ -1,7 +1,8 @@
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from src.search_clients import SearchResult
-
+from providers.base_provider import SearchResult
+from src.claims_parser import ClaimsParser
 
 @dataclass
 class Chunk:
@@ -11,13 +12,21 @@ class Chunk:
     pub_date: str
     title: str
     chunk_idx: int
+    chunk_type: str = "summary"         # "abstract" | "summary" | "claim" | "independent_claim" | "sub_claim"
+    claim_number: int | None = None
+    sub_index: str | None = None        # "A", "B", "C" etc. for sub-claims
+    language: str = "en"
+    ipc_codes: list[str] = field(default_factory=list)
+    cpc_codes: list[str] = field(default_factory=list)
 
     @property
     def uid(self) -> str:
-        return f"{self.source}_{self.doc_id}_{self.chunk_idx}"
-
-
-_MIN_CHUNK_CHARS = 50
+        suffix = f"_{self.chunk_type}"
+        if self.claim_number is not None:
+            suffix += f"_{self.claim_number}"
+        if self.sub_index is not None:
+            suffix += f"_{self.sub_index}"
+        return f"{self.source}_{self.doc_id}_{self.chunk_idx}{suffix}"
 
 
 class Chunker:
@@ -27,16 +36,102 @@ class Chunker:
             chunk_overlap=chunk_overlap,
             separators=["\n\n", "\n", ". ", "。", " ", ""],
         )
+        self._parser = ClaimsParser()
 
-    def chunk_document(self, result: SearchResult, text: str) -> list:
-        """단일 문서 텍스트를 Chunk 리스트로 분리."""
-        if not text or not text.strip():
-            return []
-        raw_chunks = self._splitter.split_text(text)
+    def chunk_document(self, result: SearchResult, full_text: str) -> list[Chunk]:
+        """
+        Chunk a single document based on its claim structure and sections.
+        """
+        is_patent = result.source in ("kipris", "epo")
         chunks = []
-        for idx, raw in enumerate(raw_chunks):
+        
+        # 1. Abstract Chunk (always present if abstract exists)
+        if result.abstract and result.abstract.strip():
+            chunks.append(Chunk(
+                text=result.abstract.strip(),
+                doc_id=result.doc_id,
+                source=result.source,
+                pub_date=result.pub_date,
+                title=result.title,
+                chunk_idx=0,
+                chunk_type="abstract",
+                language=result.language,
+                ipc_codes=result.ipc_codes,
+                cpc_codes=result.cpc_codes
+            ))
+            
+        if not full_text or not full_text.strip():
+            return chunks
+            
+        # 2. Extract Claims if it is a patent
+        claims_dict = {}
+        if is_patent:
+            try:
+                claims_sec = self._extract_claims_section(full_text)
+                if claims_sec:
+                    nodes = self._parser.parse(claims_sec)
+                    for num, node in nodes.items():
+                        claims_dict[num] = node
+            except Exception as e:
+                print(f"[warn] Failed to parse claims from patent {result.doc_id}: {e}")
+                
+        # 3. Create Chunks for Claims
+        chunk_idx = 1
+        if claims_dict:
+            for num, node in claims_dict.items():
+                is_ind = node.is_independent
+                ctype = "independent_claim" if is_ind else "claim"
+                
+                # Independent / Claim entire text chunk
+                chunks.append(Chunk(
+                    text=node.text,
+                    doc_id=result.doc_id,
+                    source=result.source,
+                    pub_date=result.pub_date,
+                    title=result.title,
+                    chunk_idx=chunk_idx,
+                    chunk_type=ctype,
+                    claim_number=num,
+                    language=result.language,
+                    ipc_codes=result.ipc_codes,
+                    cpc_codes=result.cpc_codes
+                ))
+                chunk_idx += 1
+                
+                # Split claim text into sub-claims (e.g. claim_1_A, claim_1_B)
+                # Split by delimiters like semicolon (;) or structural keywords
+                sub_parts = [p.strip() for p in re.split(r";", node.text) if len(p.strip()) > 30]
+                if len(sub_parts) > 1:
+                    for idx, part in enumerate(sub_parts):
+                        sub_char = chr(65 + idx)  # A, B, C...
+                        chunks.append(Chunk(
+                            text=part,
+                            doc_id=result.doc_id,
+                            source=result.source,
+                            pub_date=result.pub_date,
+                            title=result.title,
+                            chunk_idx=chunk_idx,
+                            chunk_type="sub_claim",
+                            claim_number=num,
+                            sub_index=sub_char,
+                            language=result.language,
+                            ipc_codes=result.ipc_codes,
+                            cpc_codes=result.cpc_codes
+                        ))
+                        chunk_idx += 1
+                        
+        # 4. Description/Summary Chunks
+        desc_text = full_text
+        if claims_dict:
+            # Remove claims section from description to avoid duplicate indexing
+            claims_sec = self._extract_claims_section(full_text)
+            if claims_sec:
+                desc_text = full_text.replace(claims_sec, "")
+                
+        raw_desc_chunks = self._splitter.split_text(desc_text)
+        for raw in raw_desc_chunks:
             raw = raw.strip()
-            if len(raw) < _MIN_CHUNK_CHARS:
+            if len(raw) < 50:
                 continue
             chunks.append(Chunk(
                 text=raw,
@@ -44,14 +139,19 @@ class Chunker:
                 source=result.source,
                 pub_date=result.pub_date,
                 title=result.title,
-                chunk_idx=idx,
+                chunk_idx=chunk_idx,
+                chunk_type="summary",
+                language=result.language,
+                ipc_codes=result.ipc_codes,
+                cpc_codes=result.cpc_codes
             ))
+            chunk_idx += 1
+            
         return chunks
 
-    def chunk_all(self, search_results: list, cache) -> list:
+    def chunk_all(self, search_results: list, cache) -> list[Chunk]:
         """
-        ClaimSearchResults 목록 전체에서 문서 텍스트를 로드해 청킹.
-        중복 doc_id는 한 번만 처리.
+        Retrieve document text from cache, chunk it, and return all chunks.
         """
         seen: set[str] = set()
         all_chunks: list[Chunk] = []
@@ -65,9 +165,18 @@ class Chunker:
 
                 text = cache.load_text(result.source, result.doc_id)
                 if not text:
-                    # 캐시에 텍스트 없으면 abstract만 사용
                     text = result.abstract or ""
                 chunks = self.chunk_document(result, text)
                 all_chunks.extend(chunks)
 
         return all_chunks
+
+    def _extract_claims_section(self, text: str) -> str:
+        pattern = re.compile(
+            r"(?:^|\n)#+\s*(?:청구\s*범위|CLAIMS?)\s*\n(.*?)(?=\n#+\s|\Z)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        m = pattern.search(text)
+        if m:
+            return m.group(1).strip()
+        return ""
