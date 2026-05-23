@@ -1,0 +1,19 @@
+llm:
+  agent: claude           # claude | gemini | openai
+  model: claude-opus-4-7
+  api_key: ""             # 비워두면 로컬 CLI fallback 사용
+
+search:
+  kipris_api_key: ""      # KIPRIS Open API 키 (없으면 검색 skip)
+  max_results: 20
+
+rag:
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  # 한국어 특허 권장: paraphrase-multilingual-MiniLM-L12-v2
+  vector_db: faiss        # faiss | chromadb
+  chunk_size: 512
+  chunk_overlap: 64
+
+output:
+  format: json            # json | csv
+  dir: ./output

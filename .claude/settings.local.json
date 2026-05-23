@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd D:\\\\Searching; $env:PYTHONIOENCODING=\"utf-8\"; python main.py config 2>&1)",
+      "PowerShell(pip show opendataloader-pdf 2>&1)",
+      "PowerShell(pip index versions opendataloader-pdf 2>&1)"
+    ]
+  }
+}

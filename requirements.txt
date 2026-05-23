@@ -1,0 +1,21 @@
+# Phase 1: 설정 관리자 & LLM 라우터
+pyyaml>=6.0
+
+# LLM API 클라이언트 (사용하는 에이전트에 맞게 설치)
+anthropic>=0.40.0          # Claude API
+google-generativeai>=0.8.0 # Gemini API
+openai>=1.50.0             # OpenAI API
+
+# Phase 2: PDF 전처리 & 청구항 파서
+opendataloader-pdf>=2.4.3  # Java CLI 래퍼, Java 설치 필요
+
+# Phase 3: 외부 DB 검색 (표준 라이브러리만 사용, 추가 설치 불필요)
+# urllib, xml.etree.ElementTree, json 사용
+
+# Phase 4: 로컬 RAG 파이프라인
+sentence-transformers>=5.5.0
+faiss-cpu>=1.9.0
+chromadb>=1.5.0
+langchain-text-splitters>=0.3.0
+
+# Phase 5: 매칭 + 할루시네이션 검증 + 출력 (추가 의존성 없음)

@@ -1,0 +1,19 @@
+# 캐시 및 벡터 DB
+.cache/
+
+# 출력물
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 설정 (API 키 포함)
+config.yaml
+
+# IDE
+.idea/
+.vscode/
