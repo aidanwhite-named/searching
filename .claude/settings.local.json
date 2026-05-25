@@ -3,7 +3,32 @@
     "allow": [
       "PowerShell(cd D:\\\\Searching; $env:PYTHONIOENCODING=\"utf-8\"; python main.py config 2>&1)",
       "PowerShell(pip show opendataloader-pdf 2>&1)",
-      "PowerShell(pip index versions opendataloader-pdf 2>&1)"
+      "PowerShell(pip index versions opendataloader-pdf 2>&1)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)",
+      "Bash(python main.py --help)",
+      "Bash(gemini --version)",
+      "Bash(gpt --version)",
+      "Bash(openai --version)",
+      "Bash(gemini --help)",
+      "Bash(claude -p \"say hi\" --help)",
+      "Bash(where claude *)",
+      "Bash(python -c \"import subprocess; r = subprocess.run\\(['where', 'claude'], capture_output=True, text=True\\); print\\(r.stdout\\); print\\(r.stderr\\)\")",
+      "PowerShell($npmPath = \"$env:APPDATA\\\\npm\"; Write-Output $npmPath; Test-Path $npmPath)",
+      "PowerShell(python main.py test 2>&1)",
+      "Bash(pip install *)",
+      "Bash(gemini -m gemini-2.5-flash -p \"say OK\")",
+      "Bash(python -c \"import fastapi, uvicorn\")",
+      "Bash(python server.py)",
+      "Bash(curl -s http://127.0.0.1:8001/)",
+      "PowerShell(Start-Process python -ArgumentList \"server.py\" -WorkingDirectory \"D:\\\\Searching\" -PassThru)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://127.0.0.1:8001/api/config\" -TimeoutSec 5 2>&1)",
+      "PowerShell(Start-Sleep 5; try { Invoke-RestMethod -Uri \"http://127.0.0.1:8001/api/config\" -TimeoutSec 10 | ConvertTo-Json -Depth 3 } catch { $_.Exception.Message })",
+      "PowerShell(python --version; \\(Get-Command python\\).Source)",
+      "Bash(cd /d D:\\\\Searching)",
+      "Bash(.venvScriptspython.exe -c ' *)",
+      "Bash(D:SearchingvenvScriptspython.exe -c ' *)"
     ]
   }
 }

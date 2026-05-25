@@ -90,14 +90,14 @@
                                         <small>유사 문헌 간 매칭 유사도 격차의 허용 한계값입니다.</small>
                                     </div>
                                     <div class="form-group">
-                                        <label for="param-max-refs">최대 검색 문헌 수 (Max References)</label>
+                                        <label for="param-max-refs">최대 인용 문헌 수 (최종 보고서)</label>
                                         <select id="param-max-refs" name="max_refs">
                                             <option value="1">1개</option>
                                             <option value="2" selected>2개 (권장)</option>
                                             <option value="3">3개</option>
                                             <option value="5">5개</option>
                                         </select>
-                                        <small>각 청구항에 매칭할 최대 선행기술 문헌 수입니다.</small>
+                                        <small>RAG로 걸러낸 후 거절이유서에 최종 인용할 문헌 수. 실무 권장 2개.</small>
                                     </div>
                                     <div class="form-group">
                                         <label for="param-claims">분석 대상 청구항 (선택 사항)</label>
@@ -188,8 +188,9 @@
                                 <h3>2. 외부 특허 DB 검색 설정</h3>
                                 <div class="form-grid">
                                     <div class="form-group">
-                                        <label for="config-search-max">DB당 최대 검색 결과 수</label>
-                                        <input type="number" id="config-search-max" name="search_max_results" min="5" max="50">
+                                        <label for="config-search-max">DB당 최대 수집 건수 (API 키워드 검색)</label>
+                                        <input type="number" id="config-search-max" name="search_max_results" min="10" max="500" placeholder="200">
+                                        <small>EPO·OpenAlex·KIPRIS에서 키워드로 긁어오는 원본 문헌 수. 많을수록 RAG 정확도↑</small>
                                     </div>
                                     <div class="form-group">
                                         <label for="config-search-kipris">KIPRIS Open API Key</label>

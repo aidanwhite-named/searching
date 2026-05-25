@@ -43,7 +43,9 @@ def cmd_test(args):
 
 
 def cmd_parse(args):
-    preprocessor = PatentPreprocessor()
+    cfg = ConfigManager()
+    router = LLMRouter(cfg)
+    preprocessor = PatentPreprocessor(router=router)
     parser = ClaimsParser()
 
     print(f"[parse] PDF 변환 중: {args.pdf}")
@@ -70,7 +72,7 @@ def cmd_parse(args):
 def cmd_search(args):
     cfg = ConfigManager()
     router = LLMRouter(cfg)
-    preprocessor = PatentPreprocessor()
+    preprocessor = PatentPreprocessor(router=router)
     claims_parser = ClaimsParser()
     pipeline = SearchPipeline(router, cfg)
 
@@ -131,7 +133,7 @@ def cmd_search(args):
 def cmd_rag(args):
     cfg = ConfigManager()
     router = LLMRouter(cfg)
-    preprocessor = PatentPreprocessor()
+    preprocessor = PatentPreprocessor(router=router)
     claims_parser_obj = ClaimsParser()
     cache = DocumentCache()
     rag = RAGPipeline(cfg)
@@ -230,7 +232,7 @@ def cmd_rag(args):
 def cmd_match(args):
     cfg = ConfigManager()
     router = LLMRouter(cfg)
-    preprocessor = PatentPreprocessor()
+    preprocessor = PatentPreprocessor(router=router)
     claims_parser_obj = ClaimsParser()
     cache = DocumentCache()
     rag = RAGPipeline(cfg)

@@ -1,5 +1,8 @@
+import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
 from typing import Optional
 from src.pdf_parser import PDFParser
 
@@ -11,15 +14,22 @@ class PatentData:
     claims_markdown: str       # 청구범위 섹션 원문
     full_markdown: str         # 전체 Markdown
     title: str = ""
+    patent_number: str = ""    # 등록번호 (예: KR10-1942527)
+    ipc_codes: list = field(default_factory=list)  # 추출된 IPC/CPC 코드
 
 
 # ── 날짜 패턴 ────────────────────────────────────────────────────────────────
 
-# 한국식: 2023. 01. 15  /  2023-01-15  /  2023.01.15
+# 한국식 숫자: 2023. 01. 15  /  2023-01-15  /  2023.01.15
 _KR_DATE = r"(\d{4})[.\-\s]+(\d{1,2})[.\-\s]+(\d{1,2})"
+# 한국식 한글: 2015년11월09일 (KIPRIS 평문 출력)
+_KR_DATE_HAN = r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일"
 
 _PRIORITY_PATTERNS = [
-    # 한국어 우선권
+    # 한국어 우선권 — 한글 연월일 (KIPRIS 평문)
+    re.compile(rf"우선권\s*주장일?\s+{_KR_DATE_HAN}", re.IGNORECASE),
+    re.compile(rf"우선일\s+{_KR_DATE_HAN}", re.IGNORECASE),
+    # 한국어 우선권 — 콜론 형식
     re.compile(rf"우선권\s*주장일?\s*[:：]\s*{_KR_DATE}", re.IGNORECASE),
     re.compile(rf"우선일\s*[:：]\s*{_KR_DATE}", re.IGNORECASE),
     # 영어 우선권
@@ -29,7 +39,10 @@ _PRIORITY_PATTERNS = [
 ]
 
 _FILING_PATTERNS = [
-    # 한국어 출원일
+    # 한국어 출원일 — 한글 연월일 (KIPRIS 평문, 가장 흔함)
+    re.compile(rf"출원일자\s+{_KR_DATE_HAN}", re.IGNORECASE),
+    re.compile(rf"출원일\s+{_KR_DATE_HAN}", re.IGNORECASE),
+    # 한국어 출원일 — 콜론 형식
     re.compile(rf"출원일\s*[:：]\s*{_KR_DATE}", re.IGNORECASE),
     re.compile(rf"출원\s*일자\s*[:：]\s*{_KR_DATE}", re.IGNORECASE),
     # 영어 출원일
@@ -45,7 +58,9 @@ _MONTH_MAP = {
 # ── 청구범위 섹션 패턴 ────────────────────────────────────────────────────────
 
 _CLAIMS_SECTION = re.compile(
-    r"(?:^|\n)#+\s*(?:청구\s*범위|CLAIMS?)\s*\n(.*?)(?=\n#+\s|\Z)",
+    # 마크다운 헤딩(##) 또는 평문 줄 어느 쪽이든 매칭
+    r"(?:^|\n)(?:#+\s*)?(?:청구\s*범위|CLAIMS?)\s*\n(.*?)"
+    r"(?=\n발명의\s*설명|\n【발명의\s*설명】|\n#+\s|\Z)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -92,62 +107,212 @@ def _parse_date_groups(m: re.Match) -> Optional[str]:
         return None
 
 
+# ── LLM 추출 프롬프트 ─────────────────────────────────────────────────────────
+
+_LLM_EXTRACT_PROMPT = """\
+아래는 특허 명세서 PDF에서 추출한 원본 텍스트입니다.
+다음 메타데이터를 JSON으로만 응답하세요 (설명·코드펜스 없이 JSON 객체만):
+
+- reference_date: 우선권 주장일이 있으면 그 날짜, 없으면 출원일을 "YYYY-MM-DD"로
+- date_type: "priority" | "filing" | "unknown"
+- title: 발명의 명칭 (찾지 못하면 "")
+- patent_number: 등록번호·출원번호 (예: "10-1942527", "US10123456B2", 없으면 "")
+- ipc_codes: IPC/CPC 코드 배열 (예: ["B60W40/02", "B60W10/20"])
+- claims_start_line: 청구범위 섹션을 표시하는 첫 줄의 원문 문자열 그대로 \
+  (예: "청구범위" 또는 "청구항 1" 또는 "What is claimed is:"). 절대 가공·번역 금지.
+- claims_end_line: 청구범위 다음에 오는 섹션의 첫 줄 원문 문자열 그대로 \
+  (예: "발명의 설명" / "기 술 분 야" / "DETAILED DESCRIPTION"). \
+  청구범위가 문서 끝이면 "".
+
+응답 JSON 스키마:
+{{"reference_date":"YYYY-MM-DD","date_type":"priority|filing|unknown",\
+"title":"...","patent_number":"...","ipc_codes":["..."],\
+"claims_start_line":"...","claims_end_line":"..."}}
+
+[특허 텍스트]
+{full_text}
+"""
+
+
+def _extract_json_object(text: str) -> Optional[dict]:
+    """LLM 응답에서 첫 번째 완전한 JSON 객체 추출."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:i + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 class PatentPreprocessor:
-    def __init__(self):
+    def __init__(self, router=None, cache_dir: str = ".cache/extracted"):
+        """
+        router: LLMRouter (있으면 LLM 추출 우선, 없으면 정규식만 사용)
+        cache_dir: PDF 추출 텍스트를 저장할 디렉토리 (디버깅·재처리용)
+        """
         self._parser = PDFParser()
+        self._router = router
+        self._cache_dir = Path(cache_dir)
 
     def process(self, pdf_path: str) -> PatentData:
-        full_md = self._parser.parse(pdf_path)
+        full_text = self._parser.parse(pdf_path)
+        text_path = self._save_extracted_text(pdf_path, full_text)
+        print(f"[preprocessor] 추출 텍스트 저장: {text_path}")
+
+        # 1차: 정규식 (빠르고 한국 특허에 안정적)
+        try:
+            return self._process_with_regex(full_text)
+        except ValueError as e:
+            print(f"[preprocessor] 정규식 추출 실패: {e}")
+
+        # 2차: LLM 폴백 (해외 특허·낯선 양식 대응)
+        if self._router is not None:
+            print("[preprocessor] LLM 폴백 시도 중...")
+            return self._process_with_llm(full_text)
+
+        raise ValueError("청구범위를 추출하지 못했고 LLM 폴백도 사용 불가합니다.")
+
+    # ── LLM 경로 ──────────────────────────────────────────────────────────────
+
+    def _process_with_llm(self, full_text: str) -> PatentData:
+        """LLM에게 텍스트를 보여주고 메타데이터를 JSON으로 받는다.
+        청구범위 본문은 LLM이 알려준 시작/끝 마커로 원본에서 잘라낸다 \
+        (할루시네이션·토큰 한도 회피)."""
+        # 메타데이터는 앞 8KB 안에 다 있음. 큰 stdin은 Gemini CLI가 빈 응답을 줄 수 있음.
+        snippet = full_text[:8000]
+        prompt = _LLM_EXTRACT_PROMPT.format(full_text=snippet)
+        print(f"[preprocessor] LLM 메타데이터 추출 중 ({len(snippet)}자, 약 30~60초)...")
+
+        response = self._router.call(prompt, timeout=120)
+        data = _extract_json_object(response)
+        if not data:
+            raise ValueError(f"LLM 응답에서 JSON을 찾지 못함: {response[:200]}")
+
+        ref_date = (data.get("reference_date") or "").strip()
+        date_type = (data.get("date_type") or "unknown").strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", ref_date):
+            today = date.today().strftime("%Y-%m-%d")
+            print(f"[warn] LLM이 유효한 날짜를 반환하지 않음 → 오늘({today}) 사용")
+            ref_date, date_type = today, "unknown"
+
+        start_line = (data.get("claims_start_line") or "").strip()
+        end_line = (data.get("claims_end_line") or "").strip()
+        claims_md = self._slice_claims(full_text, start_line, end_line)
+        if not claims_md:
+            raise ValueError(
+                f"청구범위 마커로 슬라이싱 실패 (start={start_line!r}, end={end_line!r})"
+            )
+
+        patent_number = (data.get("patent_number") or "").strip()
+        ipc_codes = [c.strip() for c in data.get("ipc_codes", []) if c.strip()]
+        title = (data.get("title") or "").strip()
+
+        print(f"[preprocessor] 날짜: {ref_date} ({date_type})")
+        if patent_number:
+            print(f"[preprocessor] 특허번호: {patent_number}")
+        if ipc_codes:
+            print(f"[preprocessor] IPC/CPC: {ipc_codes[:5]}")
+        print(f"[preprocessor] 청구범위: {len(claims_md)}자 추출")
+
+        return PatentData(
+            reference_date=ref_date,
+            date_type=date_type,
+            claims_markdown=claims_md,
+            full_markdown=full_text,
+            title=title,
+            patent_number=patent_number,
+            ipc_codes=ipc_codes,
+        )
+
+    @staticmethod
+    def _slice_claims(text: str, start_line: str, end_line: str) -> str:
+        """원본 텍스트에서 start_line~end_line 사이를 추출."""
+        if not start_line:
+            return ""
+        start_idx = text.find(start_line)
+        if start_idx == -1:
+            return ""
+        body_start = start_idx + len(start_line)
+        if end_line:
+            end_idx = text.find(end_line, body_start)
+            if end_idx == -1:
+                return text[body_start:].strip()
+            return text[body_start:end_idx].strip()
+        return text[body_start:].strip()
+
+    def _save_extracted_text(self, pdf_path: str, text: str) -> Path:
+        """추출 텍스트를 .cache/extracted/<pdf명>.txt 에 저장."""
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        name = Path(pdf_path).stem + ".txt"
+        out = self._cache_dir / name
+        out.write_text(text, encoding="utf-8")
+        return out
+
+    # ── 정규식 경로 (폴백) ────────────────────────────────────────────────────
+
+    def _process_with_regex(self, full_md: str) -> PatentData:
         ref_date, date_type = self._extract_date(full_md)
-        claims_md = self._extract_claims_section(full_md)
+        claims_md = self._extract_claims_section(full_md)  # 실패 시 ValueError
         title = self._extract_title(full_md)
+        patent_number = self._extract_patent_number(full_md)
+        ipc_codes = self._extract_ipc_codes(full_md)
+        if patent_number:
+            print(f"[preprocessor] 특허번호 추출: {patent_number}")
+        if ipc_codes:
+            print(f"[preprocessor] IPC/CPC 코드: {ipc_codes[:5]}")
         return PatentData(
             reference_date=ref_date,
             date_type=date_type,
             claims_markdown=claims_md,
             full_markdown=full_md,
             title=title,
+            patent_number=patent_number,
+            ipc_codes=ipc_codes,
         )
 
     def process_markdown(self, full_md: str) -> PatentData:
-        """이미 변환된 Markdown 문자열로 처리 (테스트/재처리용)."""
-        ref_date, date_type = self._extract_date(full_md)
-        claims_md = self._extract_claims_section(full_md)
-        title = self._extract_title(full_md)
-        return PatentData(
-            reference_date=ref_date,
-            date_type=date_type,
-            claims_markdown=claims_md,
-            full_markdown=full_md,
-            title=title,
-        )
+        """이미 변환된 Markdown 문자열로 처리 (테스트/재처리용, 정규식 경로)."""
+        return self._process_with_regex(full_md)
 
     def _extract_date(self, text: str) -> tuple[str, str]:
         # 1순위: 우선권 주장일
         for pat in _PRIORITY_PATTERNS:
             m = pat.search(text)
             if m:
-                date = _parse_date_groups(m)
-                if date:
-                    return date, "priority"
+                date_str = _parse_date_groups(m)
+                if date_str:
+                    return date_str, "priority"
 
         # 2순위: 출원일
         for pat in _FILING_PATTERNS:
             m = pat.search(text)
             if m:
-                date = _parse_date_groups(m)
-                if date:
-                    return date, "filing"
+                date_str = _parse_date_groups(m)
+                if date_str:
+                    return date_str, "filing"
 
-        return "unknown", "unknown"
+        # 날짜 추출 실패 → 오늘 날짜를 폴백으로 사용
+        today = date.today().strftime("%Y-%m-%d")
+        print(f"[warn] 특허 날짜를 찾지 못했습니다. 오늘 날짜({today})를 기준일로 사용합니다.")
+        return today, "unknown"
 
     def _extract_claims_section(self, text: str) -> str:
         m = _CLAIMS_SECTION.search(text)
         if m:
             return m.group(1).strip()
-        # fallback: 전체 반환 후 경고
-        print("[warn] 청구범위 섹션을 찾지 못했습니다. 전체 텍스트를 사용합니다.")
-        return text
+        raise ValueError(
+            "[error] 청구범위 섹션을 찾지 못했습니다. "
+            "PDF가 올바른 특허 명세서인지 확인하세요."
+        )
 
     def _extract_title(self, text: str) -> str:
         for pat in _TITLE_PATTERNS:
@@ -157,3 +322,28 @@ class PatentPreprocessor:
                 if len(title) > 3:
                     return title
         return ""
+
+    def _extract_patent_number(self, text: str) -> str:
+        """등록번호·공개번호·출원번호를 ASCII에서 추출 (인코딩 깨짐 무관)."""
+        patterns = [
+            # 한국 등록특허: 10-1942527
+            re.compile(r"\b(10-\d{7})\b"),
+            # 한국 출원번호: 10-2015-0156695
+            re.compile(r"\b(10-\d{4}-\d{7})\b"),
+            # 미국: US1234567B2
+            re.compile(r"\b(US\d{6,8}[A-Z]\d?)\b"),
+            # 국제공개: WO2019/123456
+            re.compile(r"\b(WO\d{4}[/\-]\d{6})\b"),
+        ]
+        for pat in patterns:
+            m = pat.search(text)
+            if m:
+                return m.group(1)
+        return ""
+
+    def _extract_ipc_codes(self, text: str) -> list:
+        """IPC/CPC 코드 추출 (ASCII라 인코딩 무관)."""
+        pat = re.compile(r"\b([A-H]\d{2}[A-Z]\s*\d+/\d+)\b")
+        codes = pat.findall(text)
+        # 공백 제거 및 중복 제거
+        return list(dict.fromkeys(c.replace(" ", "") for c in codes))

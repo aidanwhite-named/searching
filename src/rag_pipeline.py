@@ -23,9 +23,12 @@ class RAGPipeline:
     def __init__(self, config: ConfigManager):
         self._cfg = config
         self._embedder = Embedder(config.get("rag", "embedding_model", default="BAAI/bge-m3"))
+        # mode: "memory"(기본, 세션마다 초기화) | "local"(디스크 영구 저장)
+        store_mode = config.get("rag", "store_mode", default="memory")
         self._store = VectorStore(
             backend=config.get("rag", "vector_db", default="qdrant"),
             dimension=self._embedder.dimension,
+            mode=store_mode,
         )
         self._chunker = Chunker(
             chunk_size=config.get("rag", "chunk_size", default=512),
@@ -51,6 +54,9 @@ class RAGPipeline:
             n = self._store.count()
             print(f"[rag] Loaded existing vector index: {n} chunks")
             return n
+
+        if force_rebuild:
+            self._store.clear()
 
         print("[rag] Chunking documents using claim-based rules...")
         chunks = self._chunker.chunk_all(search_results, cache)

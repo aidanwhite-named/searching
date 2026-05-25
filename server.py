@@ -1,14 +1,13 @@
 import os
-import time
 import json
 import uuid
 import traceback
 import threading
+from contextlib import asynccontextmanager
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse
-from pydantic import BaseModel
+from fastapi.responses import FileResponse
 
 from src.config_manager import ConfigManager
 from src.llm_router import LLMRouter
@@ -21,7 +20,47 @@ from src.matcher import Matcher
 from src.hallucination_checker import HallucinationChecker
 from src.output_formatter import OutputFormatter
 
-app = FastAPI(title="특허 선행기술조사 시스템 웹 대시보드")
+# ── 전역 싱글톤: 서버 시작 시 한 번만 초기화 ────────────────────────────────
+_cfg: ConfigManager = None
+_router: LLMRouter = None
+_preprocessor: PatentPreprocessor = None
+_claims_parser: ClaimsParser = None
+_cache: DocumentCache = None
+_rag: RAGPipeline = None
+_matcher: Matcher = None
+_checker: HallucinationChecker = None
+_formatter: OutputFormatter = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """서버 시작 시 무거운 모델을 한 번만 로드한다."""
+    global _cfg, _router, _preprocessor, _claims_parser
+    global _cache, _rag, _matcher, _checker, _formatter
+
+    print("[startup] 설정 및 경량 컴포넌트 초기화...")
+    _cfg          = ConfigManager()
+    _router       = LLMRouter(_cfg)
+    _preprocessor = PatentPreprocessor(router=_router)
+    _claims_parser = ClaimsParser()
+    _cache        = DocumentCache()
+    _matcher      = Matcher(
+        tolerance_band=0.05,
+        max_refs=_cfg.get("search", "max_results", default=2),
+    )
+    _checker   = HallucinationChecker()
+    _formatter = OutputFormatter()
+
+    print("[startup] 임베딩/리랭커 모델 로드 중 (최초 실행 시 다운로드 포함)...")
+    _rag = RAGPipeline(_cfg)   # Embedder + Reranker 여기서 딱 한 번만 로드
+    print("[startup] 모든 컴포넌트 준비 완료. 서버 요청 수신 시작.")
+
+    yield  # 서버 실행 구간
+
+    print("[shutdown] 서버 종료.")
+
+
+app = FastAPI(title="특허 선행기술조사 시스템 웹 대시보드", lifespan=lifespan)
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -72,20 +111,13 @@ def run_patent_analysis(task_id, pdf_path, tolerance, max_refs, no_llm, target_c
         tasks[task_id]["status"] = "running"
         tasks[task_id]["progress"] = 10
         tasks[task_id]["message"] = "PDF 변환 및 특허 문서 전처리 중..."
-        
-        cfg = ConfigManager()
-        router = LLMRouter(cfg)
-        preprocessor = PatentPreprocessor()
-        claims_parser_obj = ClaimsParser()
-        cache = DocumentCache()
-        rag = RAGPipeline(cfg)
+
+        # 전역 싱글톤 재사용 (모델 재로드 없음)
         matcher = Matcher(tolerance_band=tolerance, max_refs=max_refs)
-        checker = HallucinationChecker()
-        formatter = OutputFormatter()
-        
+
         # 1. Process PDF
-        data = preprocessor.process(pdf_path)
-        nodes = claims_parser_obj.parse(data.claims_markdown)
+        data = _preprocessor.process(pdf_path)
+        nodes = _claims_parser.parse(data.claims_markdown)
         
         tasks[task_id]["progress"] = 30
         tasks[task_id]["message"] = f"특허 파싱 완료 (독립항 및 청구항 의존성 분석). 외부 DB 검색 중..."
@@ -96,27 +128,27 @@ def run_patent_analysis(task_id, pdf_path, tolerance, max_refs, no_llm, target_c
             target = [int(c.strip()) for c in target_claims_str.split(",") if c.strip().isdigit()]
             
         # 2. External DB Search
-        pipeline = SearchPipeline(router, cfg)
+        pipeline = SearchPipeline(_router, _cfg)
         search_results = pipeline.run(
             patent_data=data,
             claim_nodes=nodes,
             target_claims=target,
-            max_per_db=cfg.get("search", "max_results", default=10)
+            max_per_db=_cfg.get("search", "max_results", default=10)
         )
-        
+
         tasks[task_id]["progress"] = 55
         tasks[task_id]["message"] = "외부 DB 검색 완료. RAG 인덱스 구축 및 유사 청크 벡터 검색 중..."
-        
-        # 3. Build RAG Index
-        n_chunks = rag.build_index(search_results, cache)
+
+        # 3. Build RAG Index (force_rebuild=True: 요청마다 새 문서로 인덱스 재구성)
+        n_chunks = _rag.build_index(search_results, _cache, force_rebuild=True)
         if n_chunks == 0:
             raise Exception("인덱싱할 문서를 찾지 못했거나 외부 검색 결과가 비어 있습니다.")
-            
+
         tasks[task_id]["progress"] = 70
         tasks[task_id]["message"] = "로컬 RAG 문서 데이터 베이스 구축 완료. 특허 청구항 거절논리 매칭 중..."
-        
+
         all_claim_nums = sorted(nodes.keys())
-        rag_results = rag.search(nodes, all_claim_nums, top_k=10)
+        rag_results = _rag.search(nodes, all_claim_nums, top_k=10)
         
         # 4. Patent claim matching
         claim_matches = matcher.match(nodes, rag_results)
@@ -132,8 +164,8 @@ def run_patent_analysis(task_id, pdf_path, tolerance, max_refs, no_llm, target_c
                     if not dm.matched_paragraph:
                         claim_node = nodes.get(cm.claim_number)
                         if claim_node:
-                            para, verified = checker.find_and_verify(
-                                cm.claim_number, claim_node.text, dm, router, cache
+                            para, verified = _checker.find_and_verify(
+                                cm.claim_number, claim_node.text, dm, _router, _cache
                             )
                             dm.matched_paragraph = para
                             dm.paragraph_verified = verified
@@ -145,9 +177,9 @@ def run_patent_analysis(task_id, pdf_path, tolerance, max_refs, no_llm, target_c
             tasks[task_id]["progress"] = 95
             
         # 6. Generate reports
-        result_json_str = formatter.to_json(data, claim_matches, nodes)
+        result_json_str = _formatter.to_json(data, claim_matches, nodes)
         result_dict = json.loads(result_json_str)
-        
+
         # Inject claim texts, parents, and children for the Web UI
         for match_item in result_dict.get("claim_matches", []):
             num = match_item["claim_number"]
@@ -156,9 +188,9 @@ def run_patent_analysis(task_id, pdf_path, tolerance, max_refs, no_llm, target_c
                 match_item["claim_text"] = node.text
                 match_item["parents"] = node.parents
                 match_item["children"] = node.children
-                
+
         # Inject dependency tree string into metadata
-        result_dict["metadata"]["dependency_tree"] = claims_parser_obj.render_tree(nodes)
+        result_dict["metadata"]["dependency_tree"] = _claims_parser.render_tree(nodes)
         
         tasks[task_id]["progress"] = 100
         tasks[task_id]["message"] = "특허 선행기술조사 분석 완료!"
@@ -191,18 +223,16 @@ def run_patent_analysis(task_id, pdf_path, tolerance, max_refs, no_llm, target_c
 
 @app.get("/api/config")
 def get_config():
-    cfg = ConfigManager()
-    return cfg.config
+    return _cfg.config
 
 @app.post("/api/config")
 def update_config(new_config: dict):
-    cfg = ConfigManager()
     for section, keys in new_config.items():
         if isinstance(keys, dict):
             for key, val in keys.items():
-                cfg.set(section, key, value=val)
-    cfg.save()
-    return {"status": "success", "config": cfg.config}
+                _cfg.set(section, key, value=val)
+    _cfg.save()
+    return {"status": "success", "config": _cfg.config}
 
 @app.post("/api/analyze")
 def analyze(

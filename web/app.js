@@ -269,7 +269,7 @@ async function loadConfiguration() {
         updateModelOptions(agent, config.llm?.model || '');
         
         dom.configLlmApiKey.value = config.llm?.api_key || '';
-        dom.configSearchMax.value = config.search?.max_results || 10;
+        dom.configSearchMax.value = config.search?.max_results || 200;
         dom.configSearchKipris.value = config.search?.kipris_api_key || '';
         dom.configSearchEpoKey.value = config.search?.epo_ops_key || '';
         dom.configSearchEpoSecret.value = config.search?.epo_ops_secret || '';

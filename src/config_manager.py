@@ -3,8 +3,8 @@ import yaml
 
 DEFAULT_CONFIG = {
     "llm": {
-        "agent": "codex",
-        "model": "gpt-5-codex",
+        "agent": "claude",
+        "model": "claude-haiku-4-5",
         "api_key": "",
     },
     "search": {
@@ -14,6 +14,7 @@ DEFAULT_CONFIG = {
     "rag": {
         "embedding_model": "BAAI/bge-m3",
         "vector_db": "qdrant",
+        "store_mode": "memory",   # "memory"(세션 인메모리) | "local"(디스크 영구 저장)
         "chunk_size": 512,
         "chunk_overlap": 64,
     },
@@ -24,10 +25,10 @@ DEFAULT_CONFIG = {
 }
 
 AGENT_DEFAULT_MODELS = {
-    "codex": "gpt-5-codex",
-    "claude": "claude-opus-4-7",
-    "gemini": "gemini-2.0-flash",
-    "openai": "gpt-4o",
+    "codex":  "gpt-4o-mini",
+    "claude": "claude-haiku-4-5",
+    "gemini": "gemini-2.5-flash",
+    "openai": "gpt-4o-mini",
 }
 
 
