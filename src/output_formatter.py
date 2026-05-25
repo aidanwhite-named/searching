@@ -11,6 +11,9 @@ from datetime import date
 from src.matcher import ClaimMatch, DocumentMatch
 from src.claims_parser import ClaimNode
 from src.patent_preprocessor import PatentData
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _doc_to_dict(dm: DocumentMatch | None) -> dict | None:
@@ -37,6 +40,8 @@ class OutputFormatter:
     ) -> str:
         covered = sum(1 for cm in claim_matches if cm.is_covered)
         total = len(claim_matches)
+        coverage = round(covered / total, 4) if total else 0.0
+        logger.info("JSON 직렬화: 청구항 %d개, 커버율 %.0f%%", total, coverage * 100)
 
         payload = {
             "metadata": {
@@ -46,13 +51,14 @@ class OutputFormatter:
                 "processed_at": str(date.today()),
                 "total_claims": total,
                 "covered_claims": covered,
-                "coverage_rate": round(covered / total, 4) if total else 0.0,
+                "coverage_rate": coverage,
             },
             "claim_matches": [self._claim_to_dict(cm) for cm in claim_matches],
         }
         return json.dumps(payload, ensure_ascii=False, indent=2)
 
     def to_csv(self, claim_matches: list) -> str:
+        logger.info("CSV 직렬화: %d개 청구항", len(claim_matches))
         buf = io.StringIO()
         fields = [
             "claim_number", "is_independent", "is_covered",
@@ -85,6 +91,7 @@ class OutputFormatter:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
+        logger.info("결과 저장: %s (%d바이트)", path, len(content.encode("utf-8")))
 
     def _claim_to_dict(self, cm: ClaimMatch) -> dict:
         return {
@@ -98,24 +105,30 @@ class OutputFormatter:
     def print_summary(self, patent_data: PatentData, claim_matches: list) -> None:
         covered = sum(1 for cm in claim_matches if cm.is_covered)
         total = len(claim_matches)
-        print(f"\n{'='*60}")
-        print(f"  발명 명칭  : {patent_data.title or '(없음)'}")
-        print(f"  기준일     : {patent_data.reference_date} ({patent_data.date_type})")
-        print(f"  커버율     : {covered}/{total} 청구항 ({covered/total*100:.1f}%)" if total else "")
-        print(f"{'='*60}")
+        logger.info("=" * 60)
+        logger.info("  발명 명칭  : %s", patent_data.title or "(없음)")
+        logger.info("  기준일     : %s (%s)", patent_data.reference_date, patent_data.date_type)
+        if total:
+            logger.info("  커버율     : %d/%d 청구항 (%.1f%%)", covered, total, covered / total * 100)
+        logger.info("=" * 60)
 
         for cm in claim_matches:
             kind = "독립항" if cm.is_independent else "종속항"
             covered_mark = "[O]" if cm.is_covered else "[X]"
-            print(f"\n  [{covered_mark}] 청구항 {cm.claim_number} ({kind})")
+            logger.info("  %s 청구항 %d (%s)", covered_mark, cm.claim_number, kind)
             if cm.primary_ref:
                 p = cm.primary_ref
                 verified = "검증O" if p.paragraph_verified else "검증X"
-                print(f"    주 인용: [{p.source}] {p.doc_id} | {p.pub_date} | "
-                      f"score={p.similarity_score:.3f} | {verified}")
+                logger.info(
+                    "    주 인용: [%s] %s | %s | score=%.3f | %s",
+                    p.source, p.doc_id, p.pub_date, p.similarity_score, verified,
+                )
                 if p.matched_paragraph:
-                    print(f"    단락  : {p.matched_paragraph[:100]}...")
+                    logger.info("    단락  : %s...", p.matched_paragraph[:100])
             for s in cm.secondary_refs:
-                print(f"    보조  : [{s.source}] {s.doc_id} | {s.pub_date} | score={s.similarity_score:.3f}")
+                logger.info(
+                    "    보조  : [%s] %s | %s | score=%.3f",
+                    s.source, s.doc_id, s.pub_date, s.similarity_score,
+                )
             if not cm.primary_ref:
-                print("    (선행문헌 없음)")
+                logger.info("    (선행문헌 없음)")

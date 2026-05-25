@@ -1,4 +1,5 @@
 import os
+import time
 import dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -14,7 +15,9 @@ from providers.epo_provider import EpoProvider
 from providers.openalex_provider import OpenAlexProvider
 from providers.gemini_search_provider import GeminiSearchProvider
 from src.document_cache import DocumentCache
+from src.logger import get_logger
 
+logger = get_logger(__name__)
 dotenv.load_dotenv()
 
 _DEFAULT_DBS = ["kipris", "epo", "openalex"]
@@ -63,25 +66,18 @@ class SearchPipeline:
         self._gemini_search.patent_number = patent_data.patent_number
         self._gemini_search.ipc_codes = patent_data.ipc_codes
 
-        # DB별 키 설정 상태 출력
         pn = patent_data.patent_number or "미추출"
-        print("\n[search] === 외부 DB 설정 상태 ===")
-        print(f"  KIPRIS       : {'✓ 키 있음' if self.providers['kipris'].api_key else '✗ API 키 없음 → skip'}")
-        print(f"  EPO          : {'✓ 키 있음' if self.providers['epo'].key else '✗ API 키 없음 → skip'}")
-        print(f"  OpenAlex     : ✓ (무료, 학술논문 전용)")
-        print(f"  Gemini Search: ✓ Google Patents 웹 검색 (특허번호: {pn})")
-        print(f"  기준일       : {cutoff}")
+        logger.info("=== 외부 DB 설정 상태 ===")
+        logger.info("  KIPRIS       : %s", "✓ 키 있음" if self.providers["kipris"].api_key else "✗ API 키 없음 → skip")
+        logger.info("  EPO          : %s", "✓ 키 있음" if self.providers["epo"].key else "✗ API 키 없음 → skip")
+        logger.info("  OpenAlex     : ✓ (무료, 학술논문 전용)")
+        logger.info("  Gemini Search: ✓ Google Patents 웹 검색 (특허번호: %s)", pn)
+        logger.info("  기준일       : %s", cutoff)
 
         if target_claims is None:
             target_claims = [n.number for n in claim_nodes.values() if n.is_independent]
+        logger.info("검색 대상 청구항: %s", target_claims)
 
-        # KIPRIS/EPO/OpenAlex 중 실제로 사용 가능한 DB가 있는지 확인
-        needs_query = (
-            bool(self.providers["kipris"].api_key) or
-            bool(self.providers["epo"].key) or
-            True  # OpenAlex는 항상 가능
-        )
-        # 그러나 gemini_search만 있으면 쿼리 생성은 낭비 → skip
         only_gemini = (
             not self.providers["kipris"].api_key and
             not self.providers["epo"].key
@@ -91,24 +87,25 @@ class SearchPipeline:
         for num in target_claims:
             node = claim_nodes.get(num)
             if not node:
-                print(f"[search] Claim {num} not found — 건너뜀.")
+                logger.warning("청구항 %d 노드 없음 — 건너뜀", num)
                 continue
 
             # 청구항 텍스트를 1500자로 제한 (Gemini CLI 프롬프트 과부하 방지)
             claim_text = node.text[:1500]
 
+            logger.info("청구항 %d 쿼리 생성 중...", num)
+            t0 = time.time()
+            query = self.generator.generate(num, claim_text, cutoff)
+            logger.info(
+                "쿼리 생성 완료: %.1f초 | Keywords=%s | CPC=%s",
+                time.time() - t0, query.keywords, query.cpc_codes,
+            )
+            logger.debug("Boolean: %s", query.boolean_query)
             if only_gemini:
-                # KIPRIS/EPO 키 없음 → 쿼리 생성 skip, gemini_search + openalex만 사용
-                print(f"\n[search] 청구항 {num} — Gemini 웹 검색 + OpenAlex 직접 실행 (쿼리 생성 생략)")
-                query = QuerySpec(claim_number=num)
-            else:
-                print(f"\n[search] 청구항 {num} 쿼리 생성 중...")
-                query = self.generator.generate(num, claim_text, cutoff)
-                print(f"  Keywords : {query.keywords}")
-                print(f"  CPC Codes: {query.cpc_codes}")
-                print(f"  Boolean  : {query.boolean_query[:80]}...")
+                logger.info("청구항 %d — KIPRIS/EPO 키 없음, OpenAlex + Gemini Search만 사용", num)
 
             found = self._search_parallel(query, claim_text, dbs, cutoff, max_per_db)
+            logger.info("청구항 %d 검색 완료: 총 %d건", num, len(found))
 
             all_results.append(ClaimSearchResults(
                 claim_number=num,
@@ -134,24 +131,27 @@ class SearchPipeline:
         def _fetch(db: str) -> tuple[str, list[SearchResult]]:
             provider = self.providers.get(db)
             if not provider:
-                print(f"  [{db}] 알 수 없는 프로바이더 — 건너뜀.")
+                logger.warning("[%s] 알 수 없는 프로바이더 — 건너뜀", db)
                 return db, []
 
-            # gemini_search는 청구항 원문 전체를 쿼리로 사용
             if db == "gemini_search":
                 q_str = claim_text
             else:
                 q_str = self._build_query_str(db, query)
 
+            logger.debug("[%s] 검색 시작: %s...", db, q_str[:60])
+            t0 = time.time()
             try:
                 hits = provider.search(q_str, cutoff, max_per_db)
+                logger.info("[%s] 검색 완료: %d건, %.1f초", db, len(hits), time.time() - t0)
             except Exception as e:
-                print(f"  [{db}] 검색 오류: {e}")
+                logger.error("[%s] 검색 오류: %s", db, e)
                 hits = []
             return db, hits
 
         # gemini_search는 웹 검색으로 오래 걸리므로 별도 처리 (다른 DB와 병렬)
         all_dbs = list(dbs) + (["gemini_search"] if "gemini_search" not in dbs else [])
+        logger.info("병렬 검색 시작: %s", all_dbs)
 
         found: list[SearchResult] = []
         with ThreadPoolExecutor(max_workers=len(all_dbs)) as executor:
@@ -167,11 +167,10 @@ class SearchPipeline:
     # ── 프로바이더별 쿼리 포맷 ────────────────────────────────────────────────
 
     @staticmethod
-    def _build_query_str(db: str, query: QuerySpec) -> str:
+    def _build_query_str(db: str, query: QuerySpec, claim_text: str = "") -> str:
         if db == "kipris":
             return query.boolean_query or " AND ".join(query.keywords)
         if db == "epo":
-            # EPO CQL: boolean_query 우선, 없으면 키워드 AND 결합
             return query.boolean_query or " AND ".join(query.keywords)
         # openalex: 단순 키워드 스트링
         return " ".join(query.keywords)

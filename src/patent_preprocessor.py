@@ -5,6 +5,9 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 from src.pdf_parser import PDFParser
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -26,26 +29,20 @@ _KR_DATE = r"(\d{4})[.\-\s]+(\d{1,2})[.\-\s]+(\d{1,2})"
 _KR_DATE_HAN = r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일"
 
 _PRIORITY_PATTERNS = [
-    # 한국어 우선권 — 한글 연월일 (KIPRIS 평문)
     re.compile(rf"우선권\s*주장일?\s+{_KR_DATE_HAN}", re.IGNORECASE),
     re.compile(rf"우선일\s+{_KR_DATE_HAN}", re.IGNORECASE),
-    # 한국어 우선권 — 콜론 형식
     re.compile(rf"우선권\s*주장일?\s*[:：]\s*{_KR_DATE}", re.IGNORECASE),
     re.compile(rf"우선일\s*[:：]\s*{_KR_DATE}", re.IGNORECASE),
-    # 영어 우선권
     re.compile(r"Priority\s+Date\s*[:：]\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE),
     re.compile(r"Priority\s+Date\s*[:：]\s*(\w+\.?\s+\d{1,2},?\s+\d{4})", re.IGNORECASE),
     re.compile(r"filed\s+(\w+\.?\s+\d{1,2},?\s+\d{4})", re.IGNORECASE),
 ]
 
 _FILING_PATTERNS = [
-    # 한국어 출원일 — 한글 연월일 (KIPRIS 평문, 가장 흔함)
     re.compile(rf"출원일자\s+{_KR_DATE_HAN}", re.IGNORECASE),
     re.compile(rf"출원일\s+{_KR_DATE_HAN}", re.IGNORECASE),
-    # 한국어 출원일 — 콜론 형식
     re.compile(rf"출원일\s*[:：]\s*{_KR_DATE}", re.IGNORECASE),
     re.compile(rf"출원\s*일자\s*[:：]\s*{_KR_DATE}", re.IGNORECASE),
-    # 영어 출원일
     re.compile(r"(?:Filing|Application)\s+Date\s*[:：]\s*(\d{4}-\d{2}-\d{2})", re.IGNORECASE),
     re.compile(r"(?:Filing|Application)\s+Date\s*[:：]\s*(\w+\.?\s+\d{1,2},?\s+\d{4})", re.IGNORECASE),
 ]
@@ -58,7 +55,6 @@ _MONTH_MAP = {
 # ── 청구범위 섹션 패턴 ────────────────────────────────────────────────────────
 
 _CLAIMS_SECTION = re.compile(
-    # 마크다운 헤딩(##) 또는 평문 줄 어느 쪽이든 매칭
     r"(?:^|\n)(?:#+\s*)?(?:청구\s*범위|CLAIMS?)\s*\n(.*?)"
     r"(?=\n발명의\s*설명|\n【발명의\s*설명】|\n#+\s|\Z)",
     re.IGNORECASE | re.DOTALL,
@@ -79,12 +75,10 @@ def _parse_date_groups(m: re.Match) -> Optional[str]:
     if not groups:
         return None
 
-    # ISO 형식 직접 매칭
     if len(groups) == 1:
         raw = groups[0].strip()
         if re.match(r"\d{4}-\d{2}-\d{2}", raw):
             return raw
-        # "January 15, 2023" 형식
         parts = re.split(r"[\s,]+", raw)
         parts = [p for p in parts if p]
         if len(parts) >= 3:
@@ -99,7 +93,6 @@ def _parse_date_groups(m: re.Match) -> Optional[str]:
                 pass
         return None
 
-    # 한국식 연/월/일 그룹
     try:
         y, m_num, d = int(groups[0]), int(groups[1]), int(groups[2])
         return f"{y:04d}-{m_num:02d}-{d:02d}"
@@ -164,19 +157,24 @@ class PatentPreprocessor:
         self._cache_dir = Path(cache_dir)
 
     def process(self, pdf_path: str) -> PatentData:
+        logger.info("PDF 파싱 시작: %s", pdf_path)
         full_text = self._parser.parse(pdf_path)
+        logger.info("PDF 텍스트 추출 완료: %d자", len(full_text))
         text_path = self._save_extracted_text(pdf_path, full_text)
-        print(f"[preprocessor] 추출 텍스트 저장: {text_path}")
+        logger.debug("추출 텍스트 저장: %s", text_path)
 
         # 1차: 정규식 (빠르고 한국 특허에 안정적)
         try:
-            return self._process_with_regex(full_text)
+            data = self._process_with_regex(full_text)
+            logger.info("정규식 파싱 성공: 날짜=%s (%s), 청구범위=%d자",
+                        data.reference_date, data.date_type, len(data.claims_markdown))
+            return data
         except ValueError as e:
-            print(f"[preprocessor] 정규식 추출 실패: {e}")
+            logger.warning("정규식 추출 실패: %s", e)
 
         # 2차: LLM 폴백 (해외 특허·낯선 양식 대응)
         if self._router is not None:
-            print("[preprocessor] LLM 폴백 시도 중...")
+            logger.info("LLM 폴백 시도 중...")
             return self._process_with_llm(full_text)
 
         raise ValueError("청구범위를 추출하지 못했고 LLM 폴백도 사용 불가합니다.")
@@ -187,10 +185,9 @@ class PatentPreprocessor:
         """LLM에게 텍스트를 보여주고 메타데이터를 JSON으로 받는다.
         청구범위 본문은 LLM이 알려준 시작/끝 마커로 원본에서 잘라낸다 \
         (할루시네이션·토큰 한도 회피)."""
-        # 메타데이터는 앞 8KB 안에 다 있음. 큰 stdin은 Gemini CLI가 빈 응답을 줄 수 있음.
         snippet = full_text[:8000]
         prompt = _LLM_EXTRACT_PROMPT.format(full_text=snippet)
-        print(f"[preprocessor] LLM 메타데이터 추출 중 ({len(snippet)}자, 약 30~60초)...")
+        logger.info("LLM 메타데이터 추출 중 (%d자, 약 30~60초)...", len(snippet))
 
         response = self._router.call(prompt, timeout=120)
         data = _extract_json_object(response)
@@ -201,7 +198,7 @@ class PatentPreprocessor:
         date_type = (data.get("date_type") or "unknown").strip()
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", ref_date):
             today = date.today().strftime("%Y-%m-%d")
-            print(f"[warn] LLM이 유효한 날짜를 반환하지 않음 → 오늘({today}) 사용")
+            logger.warning("LLM이 유효한 날짜를 반환하지 않음 → 오늘(%s) 사용", today)
             ref_date, date_type = today, "unknown"
 
         start_line = (data.get("claims_start_line") or "").strip()
@@ -216,12 +213,11 @@ class PatentPreprocessor:
         ipc_codes = [c.strip() for c in data.get("ipc_codes", []) if c.strip()]
         title = (data.get("title") or "").strip()
 
-        print(f"[preprocessor] 날짜: {ref_date} ({date_type})")
+        logger.info("LLM 추출 완료: 날짜=%s (%s), 청구범위=%d자", ref_date, date_type, len(claims_md))
         if patent_number:
-            print(f"[preprocessor] 특허번호: {patent_number}")
+            logger.info("특허번호: %s", patent_number)
         if ipc_codes:
-            print(f"[preprocessor] IPC/CPC: {ipc_codes[:5]}")
-        print(f"[preprocessor] 청구범위: {len(claims_md)}자 추출")
+            logger.info("IPC/CPC: %s", ipc_codes[:5])
 
         return PatentData(
             reference_date=ref_date,
@@ -257,7 +253,7 @@ class PatentPreprocessor:
         out.write_text(text, encoding="utf-8")
         return out
 
-    # ── 정규식 경로 (폴백) ────────────────────────────────────────────────────
+    # ── 정규식 경로 ────────────────────────────────────────────────────────────
 
     def _process_with_regex(self, full_md: str) -> PatentData:
         ref_date, date_type = self._extract_date(full_md)
@@ -266,9 +262,9 @@ class PatentPreprocessor:
         patent_number = self._extract_patent_number(full_md)
         ipc_codes = self._extract_ipc_codes(full_md)
         if patent_number:
-            print(f"[preprocessor] 특허번호 추출: {patent_number}")
+            logger.info("특허번호 추출: %s", patent_number)
         if ipc_codes:
-            print(f"[preprocessor] IPC/CPC 코드: {ipc_codes[:5]}")
+            logger.info("IPC/CPC 코드: %s", ipc_codes[:5])
         return PatentData(
             reference_date=ref_date,
             date_type=date_type,
@@ -284,25 +280,24 @@ class PatentPreprocessor:
         return self._process_with_regex(full_md)
 
     def _extract_date(self, text: str) -> tuple[str, str]:
-        # 1순위: 우선권 주장일
         for pat in _PRIORITY_PATTERNS:
             m = pat.search(text)
             if m:
                 date_str = _parse_date_groups(m)
                 if date_str:
+                    logger.debug("우선권 주장일 발견: %s", date_str)
                     return date_str, "priority"
 
-        # 2순위: 출원일
         for pat in _FILING_PATTERNS:
             m = pat.search(text)
             if m:
                 date_str = _parse_date_groups(m)
                 if date_str:
+                    logger.debug("출원일 발견: %s", date_str)
                     return date_str, "filing"
 
-        # 날짜 추출 실패 → 오늘 날짜를 폴백으로 사용
         today = date.today().strftime("%Y-%m-%d")
-        print(f"[warn] 특허 날짜를 찾지 못했습니다. 오늘 날짜({today})를 기준일로 사용합니다.")
+        logger.warning("특허 날짜를 찾지 못했습니다. 오늘 날짜(%s)를 기준일로 사용합니다.", today)
         return today, "unknown"
 
     def _extract_claims_section(self, text: str) -> str:
@@ -310,7 +305,7 @@ class PatentPreprocessor:
         if m:
             return m.group(1).strip()
         raise ValueError(
-            "[error] 청구범위 섹션을 찾지 못했습니다. "
+            "청구범위 섹션을 찾지 못했습니다. "
             "PDF가 올바른 특허 명세서인지 확인하세요."
         )
 
@@ -324,15 +319,10 @@ class PatentPreprocessor:
         return ""
 
     def _extract_patent_number(self, text: str) -> str:
-        """등록번호·공개번호·출원번호를 ASCII에서 추출 (인코딩 깨짐 무관)."""
         patterns = [
-            # 한국 등록특허: 10-1942527
             re.compile(r"\b(10-\d{7})\b"),
-            # 한국 출원번호: 10-2015-0156695
             re.compile(r"\b(10-\d{4}-\d{7})\b"),
-            # 미국: US1234567B2
             re.compile(r"\b(US\d{6,8}[A-Z]\d?)\b"),
-            # 국제공개: WO2019/123456
             re.compile(r"\b(WO\d{4}[/\-]\d{6})\b"),
         ]
         for pat in patterns:
@@ -342,8 +332,6 @@ class PatentPreprocessor:
         return ""
 
     def _extract_ipc_codes(self, text: str) -> list:
-        """IPC/CPC 코드 추출 (ASCII라 인코딩 무관)."""
         pat = re.compile(r"\b([A-H]\d{2}[A-Z]\s*\d+/\d+)\b")
         codes = pat.findall(text)
-        # 공백 제거 및 중복 제거
         return list(dict.fromkeys(c.replace(" ", "") for c in codes))

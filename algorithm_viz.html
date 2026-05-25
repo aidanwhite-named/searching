@@ -1,0 +1,1801 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>특허 선행기술조사 시스템 — 검색 알고리즘 시각화</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222536;
+    --border: #2e3250;
+    --accent1: #6c8ef5;  /* blue — external search */
+    --accent2: #5dd4a8;  /* green — RAG */
+    --accent3: #f5a623;  /* orange — matching */
+    --accent4: #e05c6c;  /* red — validation */
+    --accent5: #a87ef5;  /* purple — LLM */
+    --text: #e0e4f0;
+    --text-dim: #8890b0;
+    --text-bright: #ffffff;
+    --line: #3a4070;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* ── Layout ── */
+  .page-header {
+    background: linear-gradient(135deg, #1a1d27 0%, #0f1117 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 32px 20px;
+  }
+
+  .page-header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: -0.3px;
+  }
+
+  .page-header p {
+    color: var(--text-dim);
+    margin-top: 4px;
+    font-size: 13px;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 12px 32px 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .tab {
+    padding: 8px 18px;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid transparent;
+    border-bottom: none;
+    transition: all 0.15s;
+  }
+
+  .tab:hover { color: var(--text); background: var(--surface2); }
+
+  .tab.active {
+    color: var(--text-bright);
+    background: var(--bg);
+    border-color: var(--border);
+  }
+
+  .tab-content { display: none; padding: 28px 32px; }
+  .tab-content.active { display: block; }
+
+  /* ── Pipeline Flow ── */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    align-items: center;
+    padding: 8px 0;
+  }
+
+  .stage {
+    width: 100%;
+    max-width: 900px;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    position: relative;
+  }
+
+  .stage-number {
+    width: 40px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .stage-dot {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    flex-shrink: 0;
+    z-index: 1;
+  }
+
+  .stage-line {
+    width: 2px;
+    flex: 1;
+    margin: 2px 0;
+    min-height: 20px;
+    background: var(--line);
+  }
+
+  .stage-body {
+    flex: 1;
+    margin-left: 16px;
+    margin-bottom: 20px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  .stage-body:hover {
+    box-shadow: 0 0 0 1px rgba(108,142,245,0.3);
+  }
+
+  .stage-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+  }
+
+  .stage-icon {
+    font-size: 20px;
+    width: 28px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .stage-title {
+    flex: 1;
+  }
+
+  .stage-title h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-bright);
+  }
+
+  .stage-title p {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  .stage-tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .stage-toggle {
+    color: var(--text-dim);
+    font-size: 11px;
+    transition: transform 0.2s;
+  }
+
+  .stage-detail {
+    display: none;
+    padding: 0 18px 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .stage-detail.open {
+    display: block;
+  }
+
+  .stage-toggle.open {
+    transform: rotate(180deg);
+  }
+
+  /* ── Detail content ── */
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    padding-top: 14px;
+  }
+
+  .detail-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+
+  .detail-card h4 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+
+  .detail-card ul {
+    list-style: none;
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .detail-card ul li::before {
+    content: '›  ';
+    color: var(--text-dim);
+  }
+
+  .detail-card li span {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* ── Parallel search boxes ── */
+  .parallel-row {
+    display: flex;
+    gap: 10px;
+    padding-top: 14px;
+    flex-wrap: wrap;
+  }
+
+  .db-box {
+    flex: 1;
+    min-width: 160px;
+    border-radius: 8px;
+    padding: 12px;
+    border: 1px solid;
+  }
+
+  .db-box .db-name {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .db-box .db-info {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .db-box .db-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+    margin-top: 6px;
+  }
+
+  /* ── Color themes per stage ── */
+  .color-blue  { --c: var(--accent1); }
+  .color-green { --c: var(--accent2); }
+  .color-orange{ --c: var(--accent3); }
+  .color-red   { --c: var(--accent4); }
+  .color-purple{ --c: var(--accent5); }
+  .color-teal  { --c: #40c4d4; }
+  .color-pink  { --c: #e87fd6; }
+
+  .stage-dot.color-blue   { background: rgba(108,142,245,0.15); color: var(--accent1); border: 2px solid var(--accent1); }
+  .stage-dot.color-green  { background: rgba(93,212,168,0.15);  color: var(--accent2); border: 2px solid var(--accent2); }
+  .stage-dot.color-orange { background: rgba(245,166,35,0.15);  color: var(--accent3); border: 2px solid var(--accent3); }
+  .stage-dot.color-red    { background: rgba(224,92,108,0.15);  color: var(--accent4); border: 2px solid var(--accent4); }
+  .stage-dot.color-purple { background: rgba(168,126,245,0.15); color: var(--accent5); border: 2px solid var(--accent5); }
+  .stage-dot.color-teal   { background: rgba(64,196,212,0.15);  color: #40c4d4;        border: 2px solid #40c4d4; }
+  .stage-dot.color-pink   { background: rgba(232,127,214,0.15); color: #e87fd6;        border: 2px solid #e87fd6; }
+
+  .stage-tag.color-blue   { background: rgba(108,142,245,0.15); color: var(--accent1); }
+  .stage-tag.color-green  { background: rgba(93,212,168,0.15);  color: var(--accent2); }
+  .stage-tag.color-orange { background: rgba(245,166,35,0.15);  color: var(--accent3); }
+  .stage-tag.color-red    { background: rgba(224,92,108,0.15);  color: var(--accent4); }
+  .stage-tag.color-purple { background: rgba(168,126,245,0.15); color: var(--accent5); }
+  .stage-tag.color-teal   { background: rgba(64,196,212,0.15);  color: #40c4d4; }
+  .stage-tag.color-pink   { background: rgba(232,127,214,0.15); color: #e87fd6; }
+
+  .detail-card h4.color-blue   { color: var(--accent1); }
+  .detail-card h4.color-green  { color: var(--accent2); }
+  .detail-card h4.color-orange { color: var(--accent3); }
+  .detail-card h4.color-red    { color: var(--accent4); }
+  .detail-card h4.color-purple { color: var(--accent5); }
+  .detail-card h4.color-teal   { color: #40c4d4; }
+  .detail-card h4.color-pink   { color: #e87fd6; }
+
+  .db-box.kipris  { border-color: rgba(108,142,245,0.4); background: rgba(108,142,245,0.05); }
+  .db-box.epo     { border-color: rgba(64,196,212,0.4);  background: rgba(64,196,212,0.05); }
+  .db-box.openalex{ border-color: rgba(93,212,168,0.4);  background: rgba(93,212,168,0.05); }
+  .db-box.gemini  { border-color: rgba(245,166,35,0.4);  background: rgba(245,166,35,0.05); }
+
+  .db-box.kipris  .db-name { color: var(--accent1); }
+  .db-box.epo     .db-name { color: #40c4d4; }
+  .db-box.openalex.db-name { color: var(--accent2); }
+  .db-box.gemini  .db-name { color: var(--accent3); }
+
+  .db-box.kipris  .db-badge { background: rgba(108,142,245,0.2); color: var(--accent1); }
+  .db-box.epo     .db-badge { background: rgba(64,196,212,0.2);  color: #40c4d4; }
+  .db-box.openalex.db-badge { background: rgba(93,212,168,0.2);  color: var(--accent2); }
+  .db-box.gemini  .db-badge { background: rgba(245,166,35,0.2);  color: var(--accent3); }
+
+  /* ── Algorithm tab ── */
+  .algo-section {
+    max-width: 900px;
+    margin: 0 auto 32px;
+  }
+
+  .algo-section h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* Set Cover visualization */
+  .set-cover-demo {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+  }
+
+  .sc-claims {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+
+  .claim-chip {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 2px solid;
+    transition: all 0.3s;
+  }
+
+  .claim-chip.independent {
+    border-color: var(--accent1);
+    color: var(--accent1);
+    background: rgba(108,142,245,0.1);
+  }
+
+  .claim-chip.dependent {
+    border-color: var(--border);
+    color: var(--text-dim);
+    background: transparent;
+  }
+
+  .claim-chip.covered {
+    border-color: var(--accent2);
+    color: var(--accent2);
+    background: rgba(93,212,168,0.1);
+  }
+
+  .sc-docs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .doc-card {
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    transition: all 0.3s;
+    cursor: pointer;
+  }
+
+  .doc-card.selected {
+    border-color: var(--accent3);
+    box-shadow: 0 0 12px rgba(245,166,35,0.2);
+  }
+
+  .doc-card .doc-id {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin-bottom: 6px;
+  }
+
+  .doc-card .doc-score {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .doc-card .doc-covers {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .mini-claim {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    transition: all 0.3s;
+  }
+
+  .mini-claim.hit {
+    background: rgba(93,212,168,0.2);
+    border-color: var(--accent2);
+    color: var(--accent2);
+  }
+
+  .score-bar-wrap {
+    margin: 8px 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .score-bar {
+    flex: 1;
+    height: 5px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .score-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+  }
+
+  /* Band visualization */
+  .band-viz {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    position: relative;
+  }
+
+  .band-axis {
+    position: relative;
+    height: 60px;
+    margin: 20px 0 40px;
+  }
+
+  .band-line {
+    position: absolute;
+    top: 30px;
+    left: 5%;
+    right: 5%;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+  }
+
+  .band-range {
+    position: absolute;
+    top: 22px;
+    height: 19px;
+    border-radius: 4px;
+    background: rgba(245,166,35,0.15);
+    border: 1px dashed rgba(245,166,35,0.6);
+    transition: all 0.5s;
+  }
+
+  .band-doc {
+    position: absolute;
+    top: 15px;
+    width: 32px;
+    height: 32px;
+    margin-left: -16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s;
+    z-index: 1;
+  }
+
+  .band-label {
+    position: absolute;
+    top: 52px;
+    font-size: 10px;
+    color: var(--text-dim);
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+
+  .band-bracket {
+    position: absolute;
+    top: 0;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  /* Hallucination checker */
+  .hc-demo {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+  }
+
+  .hc-flow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+
+  .hc-step {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 12px;
+    text-align: center;
+    flex: 1;
+    min-width: 100px;
+  }
+
+  .hc-step .step-label {
+    color: var(--text-dim);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+
+  .hc-arrow {
+    color: var(--text-dim);
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .hc-verdict {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-top: 8px;
+  }
+
+  .hc-verdict.pass {
+    background: rgba(93,212,168,0.15);
+    color: var(--accent2);
+    border: 1px solid rgba(93,212,168,0.4);
+  }
+
+  .hc-verdict.fail {
+    background: rgba(224,92,108,0.15);
+    color: var(--accent4);
+    border: 1px solid rgba(224,92,108,0.4);
+  }
+
+  .highlight-text {
+    background: rgba(93,212,168,0.2);
+    color: var(--accent2);
+    padding: 1px 3px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+
+  /* ── RAG tab ── */
+  .rag-pipeline {
+    display: flex;
+    gap: 0;
+    align-items: stretch;
+    max-width: 900px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .rag-step {
+    flex: 1;
+    min-width: 140px;
+    text-align: center;
+  }
+
+  .rag-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 12px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    transition: border-color 0.2s;
+    cursor: default;
+  }
+
+  .rag-box:hover { border-color: var(--accent2); }
+
+  .rag-icon { font-size: 24px; }
+  .rag-title { font-size: 13px; font-weight: 600; color: var(--text-bright); }
+  .rag-sub { font-size: 11px; color: var(--text-dim); text-align: center; }
+
+  .rag-arrow {
+    display: flex;
+    align-items: center;
+    padding: 0 6px;
+    color: var(--text-dim);
+    font-size: 18px;
+    flex-shrink: 0;
+    margin-top: -20px;
+  }
+
+  /* ── Stats ── */
+  .stats-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 28px;
+    max-width: 900px;
+  }
+
+  .stat-card {
+    flex: 1;
+    min-width: 140px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+  }
+
+  .stat-value {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text-bright);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .stat-label {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  /* ── Code snippets ── */
+  .code-block {
+    background: #0a0c14;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    overflow-x: auto;
+    margin: 10px 0;
+  }
+
+  .kw { color: #c792ea; }
+  .fn { color: #82aaff; }
+  .str{ color: #c3e88d; }
+  .cm { color: #546e7a; font-style: italic; }
+  .num{ color: #f78c6c; }
+  .op { color: var(--text-dim); }
+
+  /* Interactive buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid;
+    transition: all 0.15s;
+    background: transparent;
+  }
+
+  .btn-blue  { border-color: var(--accent1); color: var(--accent1); }
+  .btn-green { border-color: var(--accent2); color: var(--accent2); }
+  .btn-orange{ border-color: var(--accent3); color: var(--accent3); }
+
+  .btn:hover { filter: brightness(1.2); transform: translateY(-1px); }
+  .btn:active{ transform: translateY(0); }
+
+  /* Animation pulse */
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .pulse { animation: pulse 2s infinite; }
+
+  @keyframes flowRight {
+    0% { transform: translateX(-4px); opacity: 0; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+
+  .flow-anim { animation: flowRight 0.4s ease; }
+
+  /* Dependency tree */
+  .dep-tree {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    font-family: monospace;
+    font-size: 13px;
+  }
+
+  .tree-node {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 0;
+  }
+
+  .tree-indent { color: var(--line); }
+
+  .node-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .node-badge.ind {
+    background: rgba(108,142,245,0.15);
+    color: var(--accent1);
+    border: 1px solid rgba(108,142,245,0.3);
+  }
+
+  .node-badge.dep {
+    background: rgba(64,196,212,0.1);
+    color: #40c4d4;
+    border: 1px solid rgba(64,196,212,0.2);
+  }
+
+  .node-text {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>특허 선행기술조사 시스템 — 검색 알고리즘 시각화</h1>
+  <p>PDF 입력 → 쿼리 생성 → 병렬 외부 검색 → 로컬 RAG → Set Cover 매칭 → 할루시네이션 검증 → 보고서 출력</p>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('pipeline')">전체 파이프라인</div>
+  <div class="tab" onclick="switchTab('rag')">RAG 세부 흐름</div>
+  <div class="tab" onclick="switchTab('matching')">매칭 알고리즘</div>
+  <div class="tab" onclick="switchTab('hallucination')">할루시네이션 검증</div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB 1: 전체 파이프라인
+═════════════════════════════════════════════ -->
+<div id="tab-pipeline" class="tab-content active">
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-value" style="color: var(--accent1)">4</div>
+      <div class="stat-label">외부 특허 DB</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color: var(--accent2)">200</div>
+      <div class="stat-label">DB당 최대 수집 건수</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color: var(--accent3)">5%p</div>
+      <div class="stat-label">허용 오차 밴드</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color: var(--accent4)">3회</div>
+      <div class="stat-label">할루시네이션 최대 재시도</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" style="color: var(--accent5)">2개</div>
+      <div class="stat-label">최대 인용 문헌 수</div>
+    </div>
+  </div>
+
+  <div class="pipeline">
+
+    <!-- Stage 1: PDF 입력 -->
+    <div class="stage">
+      <div class="stage-number">
+        <div class="stage-dot color-teal">1</div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-body" onclick="toggleDetail(this)">
+        <div class="stage-header">
+          <div class="stage-icon">📄</div>
+          <div class="stage-title">
+            <h3>PDF 입력 &amp; 전처리</h3>
+            <p>대상 특허 PDF 파싱 → 청구항 의존성 트리 구성</p>
+          </div>
+          <span class="stage-tag color-teal">patent_preprocessor.py</span>
+          <span class="stage-toggle">▼</span>
+        </div>
+        <div class="stage-detail">
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4 class="color-teal">추출 정보</h4>
+              <ul>
+                <li>특허번호, IPC/CPC 코드</li>
+                <li>우선권 주장일 → <span>기준일(cut-off)</span> 결정</li>
+                <li>청구항 전문 (독립항 + 종속항)</li>
+                <li>요약서, 상세한 설명</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-teal">청구항 의존성 트리</h4>
+              <div class="dep-tree" style="margin-top:8px;">
+                <div class="tree-node"><span class="node-badge ind">독립항</span><span>청구항 1</span></div>
+                <div class="tree-node"><span class="tree-indent">├── </span><span class="node-badge dep">종속항</span><span>청구항 2 (→1)</span></div>
+                <div class="tree-node"><span class="tree-indent">├── </span><span class="node-badge dep">종속항</span><span>청구항 3 (→1)</span></div>
+                <div class="tree-node"><span class="tree-indent">│   └── </span><span class="node-badge dep">종속항</span><span>청구항 4 (→3)</span></div>
+                <div class="tree-node"><span class="node-badge ind">독립항</span><span>청구항 5</span></div>
+              </div>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-teal">기준일(cut-off) 결정 로직</h4>
+              <ul>
+                <li>1순위: <span>우선권 주장일</span></li>
+                <li>2순위: <span>출원일</span></li>
+                <li>기준일 이전 문헌만 선행기술로 인정</li>
+                <li>각 외부 DB 검색 필터로 전달</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 2: LLM 쿼리 생성 -->
+    <div class="stage">
+      <div class="stage-number">
+        <div class="stage-dot color-purple">2</div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-body" onclick="toggleDetail(this)">
+        <div class="stage-header">
+          <div class="stage-icon">🧠</div>
+          <div class="stage-title">
+            <h3>LLM 검색 쿼리 생성</h3>
+            <p>독립항별 키워드·동의어·CPC·Boolean 쿼리 자동 생성</p>
+          </div>
+          <span class="stage-tag color-purple">query_generator.py</span>
+          <span class="stage-toggle">▼</span>
+        </div>
+        <div class="stage-detail">
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4 class="color-purple">입력 / 출력</h4>
+              <ul>
+                <li>입력: <span>독립항 텍스트</span> (최대 1,500자)</li>
+                <li>입력: <span>기준일</span> (cut-off)</li>
+                <li>출력: <span>keywords</span> (3~5개)</li>
+                <li>출력: <span>synonyms</span> (동의어 매핑)</li>
+                <li>출력: <span>cpc_codes</span> (IPC 분류)</li>
+                <li>출력: <span>boolean_query</span></li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-purple">LLM 라우터</h4>
+              <ul>
+                <li>기본 에이전트: <span>claude-opus-4-7</span></li>
+                <li>API 키 있으면 직접 API 호출</li>
+                <li>없으면 CLI subprocess fallback</li>
+                <li>지원: codex / claude / gemini / openai</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-purple">Boolean 쿼리 예시</h4>
+              <div class="code-block">(배터리 OR battery OR <span class="str">전지</span>) AND<br>(열관리 OR <span class="str">thermal management</span>) AND<br>(냉각 OR cooling) NOT<br>연료전지</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 3: 병렬 외부 DB 검색 -->
+    <div class="stage">
+      <div class="stage-number">
+        <div class="stage-dot color-blue">3</div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-body" onclick="toggleDetail(this)">
+        <div class="stage-header">
+          <div class="stage-icon">🔍</div>
+          <div class="stage-title">
+            <h3>병렬 외부 DB 검색</h3>
+            <p>ThreadPoolExecutor — 4개 DB 동시 쿼리, 기준일 필터</p>
+          </div>
+          <span class="stage-tag color-blue">search_pipeline.py</span>
+          <span class="stage-toggle">▼</span>
+        </div>
+        <div class="stage-detail">
+          <div class="parallel-row">
+            <div class="db-box kipris">
+              <div class="db-name">KIPRIS</div>
+              <div class="db-info">한국 특허청 공식 API<br>Boolean 쿼리 지원<br>API 키 필요</div>
+              <span class="db-badge">kipris_provider.py</span>
+            </div>
+            <div class="db-box epo">
+              <div class="db-name">EPO OPS</div>
+              <div class="db-info">유럽 특허청 Espacenet<br>CPC 코드 검색 지원<br>OAuth 인증</div>
+              <span class="db-badge">epo_provider.py</span>
+            </div>
+            <div class="db-box openalex">
+              <div class="db-name">OpenAlex</div>
+              <div class="db-info">학술 문헌 전용<br>무료 오픈 API<br>키워드 검색</div>
+              <span class="db-badge">openalex_provider.py</span>
+            </div>
+            <div class="db-box gemini">
+              <div class="db-name">Gemini Search</div>
+              <div class="db-info">Google Patents 웹 검색<br>청구항 전문 입력<br>LLM 기반 결과 해석</div>
+              <span class="db-badge">gemini_search_provider.py</span>
+            </div>
+          </div>
+          <div class="detail-grid" style="margin-top:12px;">
+            <div class="detail-card">
+              <h4 class="color-blue">병렬 처리 방식</h4>
+              <div class="code-block"><span class="kw">with</span> <span class="fn">ThreadPoolExecutor</span>(max_workers=<span class="num">4</span>) <span class="kw">as</span> ex:<br>  futures = {ex.<span class="fn">submit</span>(fetch, db): db<br>             <span class="kw">for</span> db <span class="kw">in</span> all_dbs}<br>  <span class="kw">for</span> f <span class="kw">in</span> <span class="fn">as_completed</span>(futures):<br>    db, hits = f.<span class="fn">result</span>()</div>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-blue">쿼리 포맷 분기</h4>
+              <ul>
+                <li>KIPRIS / EPO: <span>Boolean 쿼리</span> 사용</li>
+                <li>OpenAlex: <span>단순 키워드</span> 나열</li>
+                <li>Gemini: <span>청구항 전문</span> 그대로 전달</li>
+                <li>기준일 컷오프 필터 전달</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-blue">결과 수집 &amp; 캐싱</h4>
+              <ul>
+                <li>DB당 최대 <span>200건</span> 수집</li>
+                <li>수집 즉시 <span>DocumentCache</span> 저장</li>
+                <li>중복 문서 자동 식별 (pub_number)</li>
+                <li>오류 시 해당 DB만 skip (타 DB 계속)</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 4: 로컬 RAG -->
+    <div class="stage">
+      <div class="stage-number">
+        <div class="stage-dot color-green">4</div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-body" onclick="toggleDetail(this)">
+        <div class="stage-header">
+          <div class="stage-icon">🗂️</div>
+          <div class="stage-title">
+            <h3>로컬 RAG — 벡터 검색 + 리랭킹</h3>
+            <p>청킹 → BGE-M3 임베딩 → Qdrant 벡터 검색 → 리랭커</p>
+          </div>
+          <span class="stage-tag color-green">rag_pipeline.py</span>
+          <span class="stage-toggle">▼</span>
+        </div>
+        <div class="stage-detail">
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4 class="color-green">청킹 전략</h4>
+              <ul>
+                <li>청크 크기: <span>512 tokens</span>, 중복 64</li>
+                <li>chunk_type: abstract / summary</li>
+                <li>chunk_type: <span>claim</span> / independent_claim</li>
+                <li>RecursiveCharacterTextSplitter</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-green">임베딩 모델</h4>
+              <ul>
+                <li>모델: <span>BAAI/bge-m3</span></li>
+                <li>Dimension: <span>1024</span></li>
+                <li>한국어·영어 동시 지원 (다국어)</li>
+                <li>sentence-transformers 기반</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-green">검색 &amp; 리랭킹</h4>
+              <ul>
+                <li>벡터 후보: top <span>50개</span> 추출</li>
+                <li>리랭커: <span>bge-reranker-v2-m3</span></li>
+                <li>최종 반환: top <span>10개</span> (기본)</li>
+                <li>벡터 DB: <span>Qdrant</span> (로컬 embedded)</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 5: Set Cover 매칭 -->
+    <div class="stage">
+      <div class="stage-number">
+        <div class="stage-dot color-orange">5</div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-body" onclick="toggleDetail(this)">
+        <div class="stage-header">
+          <div class="stage-icon">🎯</div>
+          <div class="stage-title">
+            <h3>Set Cover 최적 인용문헌 매칭</h3>
+            <p>허용 오차 밴드 + 조정 점수로 최소 인용으로 최대 커버리지</p>
+          </div>
+          <span class="stage-tag color-orange">matcher.py</span>
+          <span class="stage-toggle">▼</span>
+        </div>
+        <div class="stage-detail">
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4 class="color-orange">조정 점수 공식</h4>
+              <div class="code-block">adjusted_score =<br>  <span class="num">0.6</span> × similarity_score +<br>  <span class="num">0.4</span> × (covered_claims / total_claims)</div>
+              <ul style="margin-top:8px;">
+                <li>w_score=<span>0.6</span>  (유사도 가중치)</li>
+                <li>w_coverage=<span>0.4</span> (커버리지 가중치)</li>
+                <li>더 많은 청구항 커버 → 우선 선택</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-orange">매칭 순서</h4>
+              <ul>
+                <li><span>①</span> 독립항 → primary ref 1개 선택</li>
+                <li><span>②</span> 종속항 → primary ref 재사용 우선</li>
+                <li><span>③</span> primary가 커버 못하면 secondary 탐색</li>
+                <li><span>④</span> 최대 인용 수: <span>2개</span> (예외 3개)</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-orange">재사용 우선 원칙</h4>
+              <ul>
+                <li>종속항도 부모의 primary ref가<br>커버하면 → 별도 문헌 추가 안함</li>
+                <li><span>누더기 거절</span> 방지 효과</li>
+                <li>root 독립항 탐색: 부모 체인 traverse</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 6: 할루시네이션 검증 -->
+    <div class="stage">
+      <div class="stage-number">
+        <div class="stage-dot color-red">6</div>
+        <div class="stage-line"></div>
+      </div>
+      <div class="stage-body" onclick="toggleDetail(this)">
+        <div class="stage-header">
+          <div class="stage-icon">🔬</div>
+          <div class="stage-title">
+            <h3>할루시네이션 검증 (Exact Match)</h3>
+            <p>LLM 추출 단락 → 원본 문서 exact match → 실패 시 재시도</p>
+          </div>
+          <span class="stage-tag color-red">hallucination_checker.py</span>
+          <span class="stage-toggle">▼</span>
+        </div>
+        <div class="stage-detail">
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4 class="color-red">검증 로직</h4>
+              <div class="code-block"><span class="kw">def</span> <span class="fn">_exact_match</span>(paragraph, doc_text):<br>  <span class="kw">return</span> <span class="fn">bool</span>(paragraph) <span class="kw">and</span> \<br>         paragraph.<span class="fn">strip</span>() <span class="kw">in</span> doc_text</div>
+              <ul style="margin-top:8px;">
+                <li>Python <span>in</span> 연산자로 단순 포함 검사</li>
+                <li>공백 trim 후 비교</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-red">재시도 전략</h4>
+              <ul>
+                <li>최대 <span>3회</span> 재시도</li>
+                <li>1회: 일반 추출 프롬프트</li>
+                <li>2~3회: "실패 알림" 포함 재추출 프롬프트</li>
+                <li>최종 실패 시: <span>paragraph_verified=False</span></li>
+                <li>문서 텍스트 최대 <span>4,000자</span> 사용</li>
+              </ul>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-red">no-llm 모드</h4>
+              <ul>
+                <li><span>verify_only()</span> 메서드 사용</li>
+                <li>LLM 호출 없이 기존 단락만 검증</li>
+                <li>비용 절감용 fallback</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 7: 출력 -->
+    <div class="stage">
+      <div class="stage-number">
+        <div class="stage-dot color-pink">7</div>
+      </div>
+      <div class="stage-body" onclick="toggleDetail(this)">
+        <div class="stage-header">
+          <div class="stage-icon">📊</div>
+          <div class="stage-title">
+            <h3>최종 출력 — JSON / CSV 보고서</h3>
+            <p>청구항별 인용문헌, 유사도, 검증 단락, 커버리지 정보 포함</p>
+          </div>
+          <span class="stage-tag color-pink">output_formatter.py</span>
+          <span class="stage-toggle">▼</span>
+        </div>
+        <div class="stage-detail">
+          <div class="detail-grid">
+            <div class="detail-card">
+              <h4 class="color-pink">JSON 출력 구조</h4>
+              <div class="code-block">{<br>  <span class="str">"claim_number"</span>: <span class="num">1</span>,<br>  <span class="str">"is_independent"</span>: <span class="kw">true</span>,<br>  <span class="str">"primary_ref"</span>: {<br>    <span class="str">"doc_id"</span>: <span class="str">"KR10-2023-..."</span>,<br>    <span class="str">"similarity_score"</span>: <span class="num">0.87</span>,<br>    <span class="str">"matched_paragraph"</span>: <span class="str">"..."</span>,<br>    <span class="str">"paragraph_verified"</span>: <span class="kw">true</span><br>  }<br>}</div>
+            </div>
+            <div class="detail-card">
+              <h4 class="color-pink">다운스트림 활용</h4>
+              <ul>
+                <li>거절이유 보고서 생성 프로그램의 <span>직접 입력값</span></li>
+                <li>청구항 번호 → 선행문헌 1:1 매핑</li>
+                <li>verified 단락 → 근거 인용문 자동화</li>
+                <li>CSV: 스프레드시트 검토용</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ════════════════════════════════════════════
+     TAB 2: RAG 세부 흐름
+═════════════════════════════════════════════ -->
+<div id="tab-rag" class="tab-content">
+  <div class="algo-section">
+    <h2><span style="color:var(--accent2)">■</span> RAG 파이프라인 세부 흐름</h2>
+
+    <div style="overflow-x:auto; padding-bottom:8px; margin-bottom:28px;">
+      <div style="display:flex; align-items:stretch; gap:0; min-width:700px;">
+
+        <div style="flex:1; text-align:center;">
+          <div class="rag-box">
+            <div class="rag-icon">📋</div>
+            <div class="rag-title">검색 결과 입력</div>
+            <div class="rag-sub">외부 DB에서 수집된<br>SearchResult 목록</div>
+            <div style="margin-top:8px;font-size:11px;color:var(--accent2);">200건/DB × 4DB</div>
+          </div>
+        </div>
+
+        <div class="rag-arrow">→</div>
+
+        <div style="flex:1; text-align:center;">
+          <div class="rag-box">
+            <div class="rag-icon">✂️</div>
+            <div class="rag-title">청킹</div>
+            <div class="rag-sub">512 token 단위<br>64 token 중복<br>청크 타입 분류</div>
+          </div>
+        </div>
+
+        <div class="rag-arrow">→</div>
+
+        <div style="flex:1; text-align:center;">
+          <div class="rag-box">
+            <div class="rag-icon">🔢</div>
+            <div class="rag-title">임베딩</div>
+            <div class="rag-sub">BAAI/bge-m3<br>1024차원 벡터<br>한/영 다국어</div>
+          </div>
+        </div>
+
+        <div class="rag-arrow">→</div>
+
+        <div style="flex:1; text-align:center;">
+          <div class="rag-box">
+            <div class="rag-icon">🗄️</div>
+            <div class="rag-title">Qdrant 저장</div>
+            <div class="rag-sub">로컬 embedded<br>.cache/qdrant_db<br>영구 저장 옵션</div>
+          </div>
+        </div>
+
+        <div class="rag-arrow">→</div>
+
+        <div style="flex:1; text-align:center;">
+          <div class="rag-box">
+            <div class="rag-icon">🎯</div>
+            <div class="rag-title">벡터 검색</div>
+            <div class="rag-sub">청구항 임베딩<br>코사인 유사도<br>top-50 후보</div>
+          </div>
+        </div>
+
+        <div class="rag-arrow">→</div>
+
+        <div style="flex:1; text-align:center;">
+          <div class="rag-box">
+            <div class="rag-icon">⬆️</div>
+            <div class="rag-title">리랭킹</div>
+            <div class="rag-sub">bge-reranker-v2-m3<br>교차 인코더 방식<br>top-10 반환</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <h2><span style="color:var(--accent2)">■</span> 청크 타입 분류 체계</h2>
+
+    <div class="detail-grid" style="margin-bottom:28px;">
+      <div class="detail-card">
+        <h4 class="color-green">abstract</h4>
+        <ul>
+          <li>특허 요약(Abstract) 전문</li>
+          <li>발명의 핵심을 압축 표현</li>
+          <li>빠른 관련성 판단에 유용</li>
+        </ul>
+      </div>
+      <div class="detail-card">
+        <h4 class="color-green">summary</h4>
+        <ul>
+          <li>발명의 상세한 설명 청크</li>
+          <li>기술적 세부사항 포함</li>
+          <li>실시예·도면 설명 포함 가능</li>
+        </ul>
+      </div>
+      <div class="detail-card">
+        <h4 class="color-green">independent_claim</h4>
+        <ul>
+          <li>선행문헌의 독립 청구항</li>
+          <li>핵심 기술 구성요소 명시</li>
+          <li>진보성 판단 핵심 대상</li>
+        </ul>
+      </div>
+      <div class="detail-card">
+        <h4 class="color-green">claim / sub_claim</h4>
+        <ul>
+          <li>선행문헌의 종속 청구항</li>
+          <li>부가적 기술적 특징</li>
+          <li>종속항 간 유사성 탐색</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2><span style="color:var(--accent2)">■</span> 벡터 검색 vs 리랭킹 비교</h2>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;max-width:900px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--accent2);margin-bottom:12px;">1단계: 벡터 검색 (Dense Retrieval)</div>
+          <ul style="list-style:none;font-size:12px;color:var(--text-dim);display:flex;flex-direction:column;gap:6px;">
+            <li>• 쿼리 벡터와 저장 벡터 간 <strong style="color:var(--text)">코사인 유사도</strong> 계산</li>
+            <li>• ANN(근사 최근접 이웃) 빠른 검색</li>
+            <li>• top-<strong style="color:var(--text)">50</strong>개 후보 추출</li>
+            <li>• 단일 벡터 비교 → 속도 빠름</li>
+            <li>• 의미적 유사성 기반</li>
+          </ul>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--accent3);margin-bottom:12px;">2단계: 리랭킹 (Cross-Encoder)</div>
+          <ul style="list-style:none;font-size:12px;color:var(--text-dim);display:flex;flex-direction:column;gap:6px;">
+            <li>• 쿼리 + 청크를 <strong style="color:var(--text)">함께 입력</strong>으로 상호작용 모델링</li>
+            <li>• bge-reranker-v2-m3 cross-encoder</li>
+            <li>• 50개 → top-<strong style="color:var(--text)">10</strong>개로 정밀 선별</li>
+            <li>• 속도 느리지만 정확도 높음</li>
+            <li>• 문맥적 관련성 기반</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ════════════════════════════════════════════
+     TAB 3: 매칭 알고리즘
+═════════════════════════════════════════════ -->
+<div id="tab-matching" class="tab-content">
+  <div class="algo-section">
+
+    <h2><span style="color:var(--accent3)">■</span> 허용 오차 밴드 (Tolerance Band) 시각화</h2>
+
+    <div class="band-viz" style="margin-bottom:28px;">
+      <div style="font-size:13px;color:var(--text-dim);margin-bottom:4px;">유사도 점수 분포 — 5%p 밴드 내 후보군 동일 취급</div>
+
+      <div class="band-axis" id="bandAxis">
+        <div class="band-line"></div>
+        <!-- docs will be placed by JS -->
+      </div>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;">
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <div style="width:14px;height:14px;border-radius:3px;background:rgba(245,166,35,0.2);border:1px dashed rgba(245,166,35,0.6);"></div>
+          <span style="color:var(--text-dim)">허용 오차 밴드 (최고점 − 5%p)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <div style="width:14px;height:14px;border-radius:50%;background:rgba(93,212,168,0.3);border:2px solid var(--accent2);"></div>
+          <span style="color:var(--text-dim)">밴드 내 후보 (동일 우선순위)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <div style="width:14px;height:14px;border-radius:50%;background:rgba(100,100,120,0.2);border:2px solid var(--border);"></div>
+          <span style="color:var(--text-dim)">밴드 외 후보 (제외)</span>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+        <div style="font-size:13px;font-weight:600;color:var(--text-bright);margin-bottom:8px;">조정 점수로 최종 선택</div>
+        <div id="bandResult" style="font-size:12px;color:var(--text-dim);"></div>
+      </div>
+    </div>
+
+    <h2><span style="color:var(--accent3)">■</span> Set Cover — 최소 문헌으로 최대 청구항 커버</h2>
+
+    <div class="set-cover-demo" style="margin-bottom:28px;">
+      <div style="font-size:13px;color:var(--text-dim);margin-bottom:12px;">청구항 커버리지 시뮬레이션 — 문헌을 클릭해 선택</div>
+
+      <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px;">청구항 목록</div>
+      <div class="sc-claims" id="scClaims"></div>
+
+      <div style="font-size:12px;font-weight:600;color:var(--text);margin:16px 0 8px;">후보 문헌</div>
+      <div class="sc-docs" id="scDocs"></div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+        <button class="btn btn-orange" onclick="runSetCover()">▶ 자동 최적 선택</button>
+        <button class="btn btn-blue" onclick="resetSetCover()">↺ 초기화</button>
+      </div>
+
+      <div id="scResult" style="margin-top:14px;font-size:13px;color:var(--text-dim);"></div>
+    </div>
+
+    <h2><span style="color:var(--accent3)">■</span> 종속항 재사용 우선 원칙</h2>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;max-width:900px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--accent2);margin-bottom:10px;">재사용 성공 (누더기 방지)</div>
+          <div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:12px;">
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="background:rgba(108,142,245,0.2);color:var(--accent1);padding:2px 8px;border-radius:4px;font-weight:600;">독립항 1</span>
+                <span style="color:var(--text-dim)">→ 문헌 A 선택</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;padding-left:20px;">
+                <span style="color:var(--border)">└─</span>
+                <span style="background:rgba(64,196,212,0.1);color:#40c4d4;padding:2px 8px;border-radius:4px;font-weight:600;">종속항 2</span>
+                <span style="color:var(--accent2)">→ 문헌 A 재사용 ✓</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;padding-left:20px;">
+                <span style="color:var(--border)">└─</span>
+                <span style="background:rgba(64,196,212,0.1);color:#40c4d4;padding:2px 8px;border-radius:4px;font-weight:600;">종속항 3</span>
+                <span style="color:var(--accent2)">→ 문헌 A 재사용 ✓</span>
+              </div>
+            </div>
+            <div style="margin-top:10px;padding:8px;background:rgba(93,212,168,0.08);border-radius:6px;color:var(--accent2);font-size:11px;">인용 문헌 수: 1개 (최소)</div>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--accent3);margin-bottom:10px;">Secondary 추가 (재사용 불가 시)</div>
+          <div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:12px;">
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="background:rgba(108,142,245,0.2);color:var(--accent1);padding:2px 8px;border-radius:4px;font-weight:600;">독립항 1</span>
+                <span style="color:var(--text-dim)">→ 문헌 A 선택</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;padding-left:20px;">
+                <span style="color:var(--border)">└─</span>
+                <span style="background:rgba(64,196,212,0.1);color:#40c4d4;padding:2px 8px;border-radius:4px;font-weight:600;">종속항 2</span>
+                <span style="color:var(--accent3)">→ 문헌 B 추가 (secondary)</span>
+              </div>
+            </div>
+            <div style="margin-top:10px;padding:8px;background:rgba(245,166,35,0.08);border-radius:6px;color:var(--accent3);font-size:11px;">인용 문헌 수: 2개 (최대 한도 내)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ════════════════════════════════════════════
+     TAB 4: 할루시네이션 검증
+═════════════════════════════════════════════ -->
+<div id="tab-hallucination" class="tab-content">
+  <div class="algo-section">
+
+    <h2><span style="color:var(--accent4)">■</span> 할루시네이션 검증 인터랙티브 시뮬레이션</h2>
+
+    <div class="hc-demo" style="margin-bottom:28px;">
+
+      <div style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">
+        LLM이 선행문헌에서 단락을 추출하면, 원본 텍스트에 실제로 존재하는지 검증합니다.
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">선행문헌 원본 텍스트 (일부)</div>
+          <div id="hcDocText" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;line-height:1.7;color:var(--text-dim);height:140px;overflow-y:auto;"></div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">LLM 추출 단락</div>
+          <textarea id="hcParagraph" style="width:100%;height:140px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;color:var(--text);resize:none;font-family:inherit;line-height:1.7;"></textarea>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+        <button class="btn btn-red" onclick="runHallucinationCheck()" style="--accent4:var(--accent4);border-color:var(--accent4);color:var(--accent4);">🔬 Exact Match 검증</button>
+        <button class="btn btn-blue" onclick="loadHallucinationExample('pass')">예시: 검증 성공</button>
+        <button class="btn btn-orange" onclick="loadHallucinationExample('fail')">예시: 검증 실패</button>
+      </div>
+
+      <div id="hcResult" style="display:none;"></div>
+
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
+        <div style="font-size:13px;font-weight:700;color:var(--text-bright);margin-bottom:12px;">재시도 흐름</div>
+        <div class="hc-flow">
+          <div class="hc-step">
+            <div class="step-label">시도 1</div>
+            <div>일반 추출 프롬프트</div>
+          </div>
+          <div class="hc-arrow">→</div>
+          <div class="hc-step">
+            <div class="step-label">Exact Match</div>
+            <div>Python <code>in</code> 연산</div>
+          </div>
+          <div class="hc-arrow">→</div>
+          <div class="hc-step" style="border-color:rgba(93,212,168,0.4);">
+            <div class="step-label" style="color:var(--accent2)">성공</div>
+            <div style="color:var(--accent2)">verified=True</div>
+          </div>
+        </div>
+        <div class="hc-flow" style="margin-top:8px;">
+          <div class="hc-step">
+            <div class="step-label">시도 1 실패</div>
+            <div>재시도 프롬프트</div>
+          </div>
+          <div class="hc-arrow">→</div>
+          <div class="hc-step">
+            <div class="step-label">시도 2~3</div>
+            <div>"실패 고지" 포함</div>
+          </div>
+          <div class="hc-arrow">→</div>
+          <div class="hc-step" style="border-color:rgba(224,92,108,0.4);">
+            <div class="step-label" style="color:var(--accent4)">최종 실패</div>
+            <div style="color:var(--accent4)">verified=False</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h2><span style="color:var(--accent4)">■</span> 검증 전략 비교</h2>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;max-width:900px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--accent4);margin-bottom:10px;">기본 모드 (LLM + Exact Match)</div>
+          <ul style="list-style:none;font-size:12px;color:var(--text-dim);display:flex;flex-direction:column;gap:6px;">
+            <li>• LLM이 관련 단락 <span style="color:var(--text)">능동적 추출</span></li>
+            <li>• 원본 텍스트와 exact match 검증</li>
+            <li>• 실패 시 최대 3회 재시도</li>
+            <li>• API 비용 발생</li>
+            <li>• <span style="color:var(--accent2)">paragraph_verified=True</span> 보장 추구</li>
+          </ul>
+        </div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--text-dim);margin-bottom:10px;">--no-llm 모드 (verify_only)</div>
+          <ul style="list-style:none;font-size:12px;color:var(--text-dim);display:flex;flex-direction:column;gap:6px;">
+            <li>• LLM 호출 없음 (비용 0)</li>
+            <li>• 기존 저장된 단락만 검증</li>
+            <li>• 빠른 배치 검증에 적합</li>
+            <li>• 단락 품질 보장 없음</li>
+            <li>• <span style="color:var(--accent3)">신속한 대량 처리</span> 목적</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<script>
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    const names = ['pipeline','rag','matching','hallucination'];
+    t.classList.toggle('active', names[i] === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(c => {
+    c.classList.toggle('active', c.id === 'tab-' + name);
+  });
+}
+
+// ── Stage detail toggle ────────────────────────────────────────────────────
+function toggleDetail(stageBody) {
+  const detail = stageBody.querySelector('.stage-detail');
+  const toggle = stageBody.querySelector('.stage-toggle');
+  detail.classList.toggle('open');
+  toggle.classList.toggle('open');
+}
+
+// ── Band visualization ─────────────────────────────────────────────────────
+const bandDocs = [
+  { id: 'A', score: 0.91, covers: [1,2,3], x: 86 },
+  { id: 'B', score: 0.88, covers: [1,4],   x: 74 },
+  { id: 'C', score: 0.84, covers: [2,5],   x: 56 },
+  { id: 'D', score: 0.79, covers: [3],     x: 38 },
+  { id: 'E', score: 0.71, covers: [4,5],   x: 18 },
+];
+
+function renderBand() {
+  const axis = document.getElementById('bandAxis');
+  axis.innerHTML = '<div class="band-line"></div>';
+
+  const maxScore = Math.max(...bandDocs.map(d => d.score));
+  const threshold = maxScore - 0.05;
+  const leftPct = bandDocs.find(d => d.score >= threshold && d.x === Math.min(...bandDocs.filter(d2 => d2.score >= threshold).map(d2 => d2.x)))?.x || 10;
+
+  // Band range
+  const range = document.createElement('div');
+  range.className = 'band-range';
+  range.style.left = (leftPct - 5) + '%';
+  range.style.right = (100 - 92) + '%';
+  axis.appendChild(range);
+
+  // Max label
+  const maxLabel = document.createElement('div');
+  maxLabel.className = 'band-bracket';
+  maxLabel.style.left = '86%';
+  maxLabel.style.color = 'var(--accent3)';
+  maxLabel.style.fontSize = '10px';
+  maxLabel.innerHTML = '최고점<br>' + maxScore.toFixed(2);
+  axis.appendChild(maxLabel);
+
+  // Threshold label
+  const thLabel = document.createElement('div');
+  thLabel.className = 'band-bracket';
+  thLabel.style.left = (leftPct - 6) + '%';
+  thLabel.style.color = 'var(--text-dim)';
+  thLabel.style.fontSize = '10px';
+  thLabel.innerHTML = '밴드 하한<br>' + threshold.toFixed(2);
+  axis.appendChild(thLabel);
+
+  bandDocs.forEach(doc => {
+    const inBand = doc.score >= threshold;
+    const el = document.createElement('div');
+    el.className = 'band-doc';
+    el.style.left = doc.x + '%';
+    el.style.background = inBand ? 'rgba(93,212,168,0.2)' : 'rgba(80,80,100,0.2)';
+    el.style.border = '2px solid ' + (inBand ? 'var(--accent2)' : 'var(--border)');
+    el.style.color = inBand ? 'var(--accent2)' : 'var(--text-dim)';
+    el.textContent = doc.id;
+    el.title = `문헌 ${doc.id}: 유사도 ${doc.score} | 커버 청구항 ${doc.covers.join(',')}`;
+
+    const label = document.createElement('div');
+    label.className = 'band-label';
+    label.style.left = doc.x + '%';
+    label.style.color = inBand ? 'var(--accent2)' : 'var(--text-dim)';
+    label.textContent = doc.score.toFixed(2);
+
+    axis.appendChild(el);
+    axis.appendChild(label);
+  });
+
+  // Result text
+  const inBand = bandDocs.filter(d => d.score >= threshold);
+  const scores = inBand.map(d => {
+    const coverage = d.covers.length / 5;
+    const adj = (0.6 * d.score + 0.4 * coverage).toFixed(3);
+    return `문헌 ${d.id}: 유사도 ${d.score} | 커버 ${d.covers.length}개 | 조정점수 ${adj}`;
+  }).join('<br>');
+  document.getElementById('bandResult').innerHTML =
+    `밴드 내 후보 ${inBand.length}개:<br>${scores}<br><br>` +
+    `<span style="color:var(--accent3);font-weight:600;">선택: 문헌 A</span> (조정점수 최고)`;
+}
+
+renderBand();
+
+// ── Set Cover simulation ───────────────────────────────────────────────────
+const totalClaims = 5;
+const docData = [
+  { id: '문헌 A', score: 0.91, covers: [1,2,3], adjScore: null },
+  { id: '문헌 B', score: 0.88, covers: [1,4],   adjScore: null },
+  { id: '문헌 C', score: 0.84, covers: [2,5],   adjScore: null },
+  { id: '문헌 D', score: 0.79, covers: [3],     adjScore: null },
+];
+docData.forEach(d => {
+  d.adjScore = (0.6 * d.score + 0.4 * d.covers.length / totalClaims).toFixed(3);
+});
+
+let selectedDocs = new Set();
+
+function renderSetCover() {
+  // Claims
+  const claimsEl = document.getElementById('scClaims');
+  claimsEl.innerHTML = '';
+  for (let i = 1; i <= totalClaims; i++) {
+    const covered = [...selectedDocs].some(id => {
+      const doc = docData.find(d => d.id === id);
+      return doc && doc.covers.includes(i);
+    });
+    const isIndependent = i === 1 || i === 5;
+    const chip = document.createElement('div');
+    chip.className = 'claim-chip ' + (covered ? 'covered' : isIndependent ? 'independent' : 'dependent');
+    chip.textContent = `청구항 ${i}` + (isIndependent ? ' (독립)' : ' (종속)');
+    claimsEl.appendChild(chip);
+  }
+
+  // Docs
+  const docsEl = document.getElementById('scDocs');
+  docsEl.innerHTML = '';
+  docData.forEach(doc => {
+    const card = document.createElement('div');
+    card.className = 'doc-card' + (selectedDocs.has(doc.id) ? ' selected' : '');
+    card.onclick = () => toggleDoc(doc.id);
+
+    const docIdEl = document.createElement('div');
+    docIdEl.className = 'doc-id';
+    docIdEl.textContent = doc.id + (selectedDocs.has(doc.id) ? ' ✓' : '');
+
+    const scoreEl = document.createElement('div');
+    scoreEl.className = 'doc-score';
+    scoreEl.textContent = `유사도: ${doc.score} | 조정점수: ${doc.adjScore}`;
+
+    const barWrap = document.createElement('div');
+    barWrap.className = 'score-bar-wrap';
+    barWrap.innerHTML = `<div class="score-bar"><div class="score-fill" style="width:${doc.score*100}%;background:var(--accent${selectedDocs.has(doc.id)?'2':'1'});"></div></div><span style="font-size:10px;color:var(--text-dim)">${Math.round(doc.score*100)}%</span>`;
+
+    const covers = document.createElement('div');
+    covers.className = 'doc-covers';
+    for (let i = 1; i <= totalClaims; i++) {
+      const dot = document.createElement('div');
+      dot.className = 'mini-claim' + (doc.covers.includes(i) ? ' hit' : '');
+      dot.textContent = i;
+      covers.appendChild(dot);
+    }
+
+    card.appendChild(docIdEl);
+    card.appendChild(scoreEl);
+    card.appendChild(barWrap);
+    card.appendChild(covers);
+    docsEl.appendChild(card);
+  });
+
+  // Result
+  const coveredClaims = new Set();
+  [...selectedDocs].forEach(id => {
+    const doc = docData.find(d => d.id === id);
+    if (doc) doc.covers.forEach(c => coveredClaims.add(c));
+  });
+  const result = document.getElementById('scResult');
+  if (selectedDocs.size === 0) {
+    result.innerHTML = '';
+  } else {
+    const pct = Math.round(coveredClaims.size / totalClaims * 100);
+    result.innerHTML = `선택된 문헌: <strong style="color:var(--accent3)">${selectedDocs.size}개</strong> | ` +
+      `커버된 청구항: <strong style="color:var(--accent2)">${coveredClaims.size}/${totalClaims} (${pct}%)</strong>`;
+  }
+}
+
+function toggleDoc(id) {
+  if (selectedDocs.has(id)) selectedDocs.delete(id);
+  else selectedDocs.add(id);
+  renderSetCover();
+}
+
+function runSetCover() {
+  // Greedy set cover: sort by adjusted score desc, pick until all covered or max_refs
+  selectedDocs.clear();
+  const covered = new Set();
+  const sorted = [...docData].sort((a, b) => b.adjScore - a.adjScore);
+  for (const doc of sorted) {
+    if (selectedDocs.size >= 2) break;
+    const newCoverage = doc.covers.filter(c => !covered.has(c)).length;
+    if (newCoverage > 0) {
+      selectedDocs.add(doc.id);
+      doc.covers.forEach(c => covered.add(c));
+    }
+  }
+  renderSetCover();
+  document.getElementById('scResult').innerHTML +=
+    ' &nbsp;← <span style="color:var(--accent3)">자동 최적 선택 완료</span>';
+}
+
+function resetSetCover() {
+  selectedDocs.clear();
+  renderSetCover();
+}
+
+renderSetCover();
+
+// ── Hallucination checker ──────────────────────────────────────────────────
+const DOC_TEXT = `배터리 열관리 시스템에 관한 것으로, 본 발명은 리튬이온 배터리 셀의 온도를 균일하게 유지하기 위한 냉각 구조를 제공한다. 상기 냉각 구조는 냉각 플레이트와 열전도성 패드를 포함하며, 냉각 플레이트는 알루미늄 합금으로 제조된다. 본 발명의 열관리 모듈은 셀 온도 편차를 5°C 이내로 유지할 수 있으며, 충방전 사이클 수명을 30% 이상 향상시키는 효과가 있다. 냉각 채널은 지그재그 패턴으로 배열되어 냉각 효율을 극대화한다.`;
+
+function loadHallucinationExample(type) {
+  document.getElementById('hcDocText').textContent = DOC_TEXT;
+  if (type === 'pass') {
+    document.getElementById('hcParagraph').value = '냉각 플레이트는 알루미늄 합금으로 제조된다. 본 발명의 열관리 모듈은 셀 온도 편차를 5°C 이내로 유지할 수 있으며, 충방전 사이클 수명을 30% 이상 향상시키는 효과가 있다.';
+  } else {
+    document.getElementById('hcParagraph').value = '배터리 냉각 시스템은 구리 합금 냉각 플레이트를 사용하여 온도 편차를 3°C 이내로 유지하며, 사이클 수명을 50% 향상시킨다.';
+  }
+  document.getElementById('hcResult').style.display = 'none';
+}
+
+function runHallucinationCheck() {
+  const docText = document.getElementById('hcDocText').textContent;
+  const paragraph = document.getElementById('hcParagraph').value.trim();
+  const resultEl = document.getElementById('hcResult');
+
+  if (!docText || !paragraph) {
+    resultEl.style.display = 'block';
+    resultEl.innerHTML = '<div style="color:var(--text-dim);font-size:13px;">예시를 먼저 로드하거나 텍스트를 입력하세요.</div>';
+    return;
+  }
+
+  const isMatch = paragraph.length > 0 && docText.includes(paragraph);
+  resultEl.style.display = 'block';
+
+  if (isMatch) {
+    // Highlight the match in doc text
+    const highlighted = DOC_TEXT.replace(paragraph, `<span class="highlight-text">${paragraph}</span>`);
+    document.getElementById('hcDocText').innerHTML = highlighted;
+    resultEl.innerHTML = `
+      <div class="hc-verdict pass">✓ Exact Match 성공 — paragraph_verified = True</div>
+      <div style="margin-top:8px;font-size:12px;color:var(--text-dim);">
+        추출된 단락이 원본 문서에 정확히 포함되어 있습니다.<br>
+        인용 근거로 사용 가능합니다.
+      </div>`;
+  } else {
+    document.getElementById('hcDocText').textContent = DOC_TEXT;
+    resultEl.innerHTML = `
+      <div class="hc-verdict fail">✗ Exact Match 실패 — 재시도 프롬프트 전송</div>
+      <div style="margin-top:8px;font-size:12px;color:var(--text-dim);">
+        추출된 단락이 원본 문서에서 발견되지 않았습니다.<br>
+        최대 3회까지 재시도합니다. 모두 실패 시 verified=False로 출력됩니다.
+      </div>`;
+  }
+}
+
+loadHallucinationExample('pass');
+</script>
+</body>
+</html>

@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import urllib.parse
@@ -5,7 +6,10 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from providers.base_provider import BaseProvider, SearchResult
 
+logger = logging.getLogger(__name__)
+
 _KIPRIS_BASE = "http://plus.kipris.or.kr/kipo-api/kipi/patUtiModInfoSearchSevice/getWordSearch"
+
 
 class KiprisProvider(BaseProvider):
     def __init__(self, api_key: str = None):
@@ -13,12 +17,12 @@ class KiprisProvider(BaseProvider):
 
     def search(self, query: str, cutoff_date: str, limit: int = 10) -> list[SearchResult]:
         if not self.api_key:
-            print("[kipris] KIPRIS API Key not configured. Skipping.")
+            logger.warning("KIPRIS API Key 미설정 — 건너뜀")
             return []
-            
+
         if not query:
             return []
-            
+
         params = urllib.parse.urlencode({
             "ServiceKey": self.api_key,
             "searchWord": query,
@@ -26,17 +30,17 @@ class KiprisProvider(BaseProvider):
             "numOfRows": limit,
         })
         url = f"{_KIPRIS_BASE}?{params}"
-        
+        logger.debug("KIPRIS 요청: %s...", query[:60])
+
         try:
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "PatentSearch/2.0"}
-            )
+            req = urllib.request.Request(url, headers={"User-Agent": "PatentSearch/2.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
                 raw_xml = resp.read().decode("utf-8", errors="replace")
-            return self._parse_xml(raw_xml, cutoff_date)
+            results = self._parse_xml(raw_xml, cutoff_date)
+            logger.info("KIPRIS 결과: %d건 (cutoff=%s)", len(results), cutoff_date)
+            return results
         except Exception as e:
-            print(f"[kipris] Search failed: {e}")
+            logger.error("KIPRIS 검색 실패: %s", e)
             return []
 
     def _parse_xml(self, raw: str, cutoff_date: str) -> list[SearchResult]:
@@ -44,23 +48,23 @@ class KiprisProvider(BaseProvider):
         try:
             root = ET.fromstring(raw)
         except ET.ParseError as e:
-            print(f"[kipris] XML Parsing Error: {e}")
+            logger.error("KIPRIS XML 파싱 오류: %s", e)
             return []
-            
+
         for item in root.iter("item"):
             t = lambda tag: (item.findtext(tag) or "").strip()
-            
+
             pub_date = self._normalize_date(t("openDate") or t("applicationDate"))
             if pub_date and cutoff_date and pub_date[:10] >= cutoff_date[:10]:
                 continue
-                
+
             doc_id = t("applicationNumber") or t("registrationNumber")
             if not doc_id:
                 continue
-                
+
             ipc_raw = t("ipcNumber")
             ipc_codes = [code.strip() for code in ipc_raw.split(",") if code.strip()] if ipc_raw else []
-            
+
             results.append(SearchResult(
                 doc_id=doc_id,
                 title=t("inventionTitle"),

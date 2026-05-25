@@ -8,6 +8,9 @@ import os
 import re
 import urllib.request
 from providers.base_provider import SearchResult
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DocumentCache:
@@ -40,16 +43,18 @@ class DocumentCache:
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        logger.debug("캐시 저장: %s/%s", result.source, result.doc_id[:30])
         return path
 
     def fetch_and_store(self, result: SearchResult) -> SearchResult:
         """캐시 미스 시 저장. 이미 있으면 local_path만 채워 반환."""
         cached = self.get(result.source, result.doc_id)
         if cached:
+            logger.debug("캐시 HIT: %s/%s", result.source, result.doc_id[:30])
             result.local_path = self._path(result.source, result.doc_id)
             return result
 
-        # 추상(abstract)만 있으면 일단 저장; 전문은 Phase 5에서 필요시 보강
+        logger.debug("캐시 MISS: %s/%s — 신규 저장", result.source, result.doc_id[:30])
         full_text = self._try_fetch_text(result)
         result.local_path = self.store(result, full_text)
         return result
@@ -67,16 +72,16 @@ class DocumentCache:
                 headers={"User-Agent": "PatentSearchCLI/1.0"},
             )
             with urllib.request.urlopen(req, timeout=20) as resp:
-                # PDF 바이너리는 Phase 5에서 opendataloader-pdf로 처리
-                # 여기서는 URL만 기록
                 return ""
-        except Exception:
+        except Exception as e:
+            logger.debug("전문 fetch 실패 (%s): %s", result.url[:50], e)
             return ""
 
     def load_text(self, source: str, doc_id: str) -> str:
         """저장된 문서의 전문 + abstract 결합 텍스트 반환 (할루시네이션 검증용)."""
         cached = self.get(source, doc_id)
         if not cached:
+            logger.debug("load_text MISS: %s/%s", source, doc_id[:30])
             return ""
         parts = [cached.get("abstract", ""), cached.get("full_text", "")]
         return "\n\n".join(p for p in parts if p)

@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field
 from src.config_manager import ConfigManager
 from src.chunker import Chunk, Chunker
@@ -5,6 +6,9 @@ from src.embedder import Embedder
 from src.vector_store import VectorStore
 from src.document_cache import DocumentCache
 from src.reranker import Reranker
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -52,25 +56,28 @@ class RAGPipeline:
         # Qdrant client checks persistence and counts automatically
         if not force_rebuild and self._store.load(index_name):
             n = self._store.count()
-            print(f"[rag] Loaded existing vector index: {n} chunks")
+            logger.info("기존 벡터 인덱스 로드: %d개 청크", n)
             return n
 
         if force_rebuild:
             self._store.clear()
 
-        print("[rag] Chunking documents using claim-based rules...")
+        logger.info("문서 청킹 시작 (청구항 기반 규칙 적용)...")
+        t0 = time.time()
         chunks = self._chunker.chunk_all(search_results, cache)
         if not chunks:
-            print("[rag] No chunks produced — index is empty")
+            logger.warning("생성된 청크 없음 — 인덱스가 비어있습니다")
             return 0
+        logger.info("청킹 완료: %d개 청크, %.1f초", len(chunks), time.time() - t0)
 
-        print(f"[rag] Embedding {len(chunks)} chunks using multilingual BGE-M3 model...")
+        logger.info("임베딩 시작: %d개 청크 (BGE-M3 다국어 모델)...", len(chunks))
         texts = [c.text for c in chunks]
         embeddings = self._embedder.embed(texts)
 
-        print(f"[rag] Storing embedded chunks in Qdrant collection...")
+        logger.info("벡터 DB 저장 중 (Qdrant)...")
+        t0 = time.time()
         self._store.add(chunks, embeddings)
-        print(f"[rag] Vector DB index constructed: {self._store.count()} chunks in total")
+        logger.info("벡터 인덱스 구축 완료: %d개 청크, %.1f초", self._store.count(), time.time() - t0)
         return len(chunks)
 
     def search(
@@ -86,19 +93,33 @@ class RAGPipeline:
         for num in target_claims:
             node = claim_nodes.get(num)
             if not node:
+                logger.warning("청구항 %d 노드 없음 — 건너뜀", num)
                 continue
+
+            logger.info("청구항 %d RAG 검색 중 (벡터 검색 50개 → 리랭킹 top_%d)...", num, top_k)
+            t0 = time.time()
 
             # Dense vector query representation
             query_vec = self._embedder.embed_one(node.text)
-            
+
             # Retrieve top 50 candidates from Qdrant
             hits = self._store.search(query_vec, k=50)
-            
+
             # Perform semantic reranking using bge-reranker-v2-m3 to get top_k (default 10)
             reranked_hits = self._reranker.rerank(node.text, hits, top_k=top_k)
-            
+
             top_chunks = [ChunkResult(chunk=chunk, score=score) for chunk, score in reranked_hits]
             results.append(RAGClaimResult(claim_number=num, top_chunks=top_chunks))
+
+            elapsed = time.time() - t0
+            if top_chunks:
+                logger.info(
+                    "청구항 %d 검색 완료: %.1f초, top 점수=%.3f, 문서=%s",
+                    num, elapsed, top_chunks[0].score,
+                    top_chunks[0].chunk.doc_id[:30],
+                )
+            else:
+                logger.info("청구항 %d 검색 완료: %.1f초, 결과 없음", num, elapsed)
 
         return results
 

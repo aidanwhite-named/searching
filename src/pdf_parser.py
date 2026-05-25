@@ -1,6 +1,9 @@
+import logging
 import os
 import tempfile
 import pypdfium2 as pdfium
+
+logger = logging.getLogger(__name__)
 
 
 class PDFParser:
@@ -15,7 +18,7 @@ class PDFParser:
             if text.strip():
                 return text
         except Exception as e:
-            print(f"[pdf_parser] pypdfium2 실패: {e} → opendataloader 폴백")
+            logger.warning("pypdfium2 실패: %s → opendataloader 폴백", e)
 
         # 2차: opendataloader-pdf (레이아웃 인식 마크다운)
         try:

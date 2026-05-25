@@ -8,6 +8,9 @@ import re
 from src.matcher import DocumentMatch
 from src.document_cache import DocumentCache
 from src.llm_router import LLMRouter
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 _SYSTEM = (
@@ -48,7 +51,6 @@ def _parse_paragraph(response: str) -> str:
     m = re.search(r"PARAGRAPH\s*:\s*(.+)", response, re.DOTALL | re.IGNORECASE)
     if m:
         return m.group(1).strip()
-    # 형식 미준수 시 전체 응답 반환
     return response.strip()
 
 
@@ -73,9 +75,10 @@ class HallucinationChecker:
         LLM으로 매칭 단락 추출 → exact match 검증 → 실패 시 재시도.
         반환: (matched_paragraph, is_verified)
         """
+        logger.debug("할루시네이션 검증 시작: 청구항 %d ← %s", claim_number, doc_match.doc_id)
         doc_text = cache.load_text(doc_match.source, doc_match.doc_id)
         if not doc_text:
-            # 캐시에 텍스트 없으면 best_chunk만 검증
+            logger.warning("문서 텍스트 없음 (%s/%s) — 검증 불가", doc_match.source, doc_match.doc_id)
             return doc_match.matched_paragraph, False
 
         truncated = doc_text[:_MAX_DOC_CHARS]
@@ -102,17 +105,24 @@ class HallucinationChecker:
             try:
                 response = router.call(prompt, system=_SYSTEM, max_tokens=512)
             except Exception as e:
-                print(f"    [checker] LLM 호출 실패 (시도 {attempt}): {e}")
+                logger.error("LLM 호출 실패 (시도 %d/%d): %s", attempt, self.max_retries, e)
                 continue
 
             paragraph = _parse_paragraph(response)
             if _exact_match(paragraph, doc_text):
+                logger.info("Exact match 성공 (시도 %d): %s...", attempt, paragraph[:60])
                 return paragraph, True
-            print(f"    [checker] Exact match 실패 (시도 {attempt}/{self.max_retries}): {paragraph[:60]}...")
+            logger.warning(
+                "Exact match 실패 (시도 %d/%d): '%s...'",
+                attempt, self.max_retries, paragraph[:60],
+            )
 
+        logger.warning("할루시네이션 검증 최종 실패: %s", doc_match.doc_id)
         return paragraph, False
 
     def verify_only(self, paragraph: str, doc_match: DocumentMatch, cache: DocumentCache) -> bool:
         """LLM 없이 exact match만 수행 (--no-llm 모드용)."""
         doc_text = cache.load_text(doc_match.source, doc_match.doc_id)
-        return _exact_match(paragraph, doc_text) if doc_text else False
+        result = _exact_match(paragraph, doc_text) if doc_text else False
+        logger.debug("verify_only: %s → %s", doc_match.doc_id[:30], result)
+        return result

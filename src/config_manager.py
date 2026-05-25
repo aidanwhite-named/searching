@@ -1,5 +1,8 @@
+import logging
 import os
 import yaml
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
     "llm": {
@@ -41,7 +44,7 @@ class ConfigManager:
         if not os.path.exists(self.path):
             self.config = DEFAULT_CONFIG
             self.save()
-            print(f"[config] 기본 설정 파일 생성: {self.path}")
+            logger.info("기본 설정 파일 생성: %s", self.path)
             return DEFAULT_CONFIG
         with open(self.path, "r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f) or {}
@@ -76,20 +79,19 @@ class ConfigManager:
             yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True)
 
     def show(self):
-        print(f"\n=== 현재 설정 ({self.path}) ===")
         agent = self.get("llm", "agent")
         model = self.get("llm", "model")
         api_key = self.get("llm", "api_key", default="")
         key_display = f"{api_key[:8]}..." if api_key else "(없음, CLI fallback 사용)"
         mode = "API" if api_key else "CLI fallback"
-        print(f"  LLM 에이전트 : {agent}")
-        print(f"  모델         : {model}")
-        print(f"  API 키       : {key_display}")
-        print(f"  통신 모드    : {mode}")
-        print(f"  검색 최대 수 : {self.get('search', 'max_results')}")
-        print(f"  벡터 DB      : {self.get('rag', 'vector_db')}")
-        print(f"  출력 형식    : {self.get('output', 'format')}")
-        print()
+        logger.info("=== 현재 설정 (%s) ===", self.path)
+        logger.info("  LLM 에이전트 : %s", agent)
+        logger.info("  모델         : %s", model)
+        logger.info("  API 키       : %s", key_display)
+        logger.info("  통신 모드    : %s", mode)
+        logger.info("  검색 최대 수 : %s", self.get("search", "max_results"))
+        logger.info("  벡터 DB      : %s", self.get("rag", "vector_db"))
+        logger.info("  출력 형식    : %s", self.get("output", "format"))
 
     def setup_wizard(self):
         print("\n=== 설정 마법사 ===")
@@ -146,5 +148,5 @@ class ConfigManager:
             self.set("output", "format", value=inp)
 
         self.save()
-        print(f"\n[config] 설정 저장 완료: {self.path}")
+        logger.info("설정 저장 완료: %s", self.path)
         self.show()

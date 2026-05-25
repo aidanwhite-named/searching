@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 from src.claims_parser import ClaimNode
 from src.rag_pipeline import RAGClaimResult
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -72,6 +75,10 @@ def build_candidates(rag_results: list) -> dict:
                     cand.best_chunk = c.text
                 if cr.claim_number not in cand.covers_claims:
                     cand.covers_claims.append(cr.claim_number)
+
+    logger.info("후보 문헌 집계: %d개 고유 문서", len(cands))
+    for uid, c in list(cands.items())[:5]:
+        logger.debug("  후보: %s | score=%.3f | covers=%s", uid[:40], c.score, c.covers_claims)
     return cands
 
 
@@ -89,6 +96,10 @@ class Matcher:
         self.max_refs = max_refs
         self.w_score = w_score
         self.w_coverage = w_coverage
+        logger.debug(
+            "Matcher 초기화: tolerance_band=%.2f, max_refs=%d, w_score=%.1f, w_coverage=%.1f",
+            tolerance_band, max_refs, w_score, w_coverage,
+        )
 
     def match(
         self,
@@ -100,29 +111,47 @@ class Matcher:
         """
         cands = build_candidates(rag_results)
         total_claims = len(claim_nodes)
+        logger.info("매칭 시작: 청구항 %d개, 후보 문헌 %d개", total_claims, len(cands))
 
         # 독립항 → primary ref 저장 (종속항 재사용용)
-        primary_refs: dict[int, CandidateDoc] = {}  # 독립항 번호 → 선택 문헌
+        primary_refs: dict[int, CandidateDoc] = {}
 
         results: list[ClaimMatch] = []
 
-        # 독립항부터 처리
         independent = [n for n in claim_nodes.values() if n.is_independent]
         dependent = [n for n in claim_nodes.values() if not n.is_independent]
 
+        logger.info("독립항 매칭: %d개", len(independent))
         for node in sorted(independent, key=lambda n: n.number):
             cm = self._match_independent(node, cands, total_claims)
             if cm.primary_ref:
-                # primary ref를 CandidateDoc로도 저장
                 uid = f"{cm.primary_ref.source}_{cm.primary_ref.doc_id}"
                 primary_refs[node.number] = cands.get(uid)
+                logger.info(
+                    "  청구항 %d (독립항) → %s | score=%.3f | covers=%s",
+                    node.number, cm.primary_ref.doc_id[:30],
+                    cm.primary_ref.similarity_score, cm.primary_ref.covers_claims,
+                )
+            else:
+                logger.warning("  청구항 %d (독립항) → 매칭 문헌 없음", node.number)
             results.append(cm)
 
+        logger.info("종속항 매칭: %d개", len(dependent))
         for node in sorted(dependent, key=lambda n: n.number):
             root_num = self._find_root(node, claim_nodes)
             primary_cand = primary_refs.get(root_num)
             cm = self._match_dependent(node, cands, primary_cand, total_claims)
+            if cm.primary_ref:
+                logger.debug(
+                    "  청구항 %d (종속항, root=%d) → %s | covered=%s",
+                    node.number, root_num, cm.primary_ref.doc_id[:30], cm.is_covered,
+                )
+            else:
+                logger.debug("  청구항 %d (종속항) → 매칭 문헌 없음", node.number)
             results.append(cm)
+
+        covered = sum(1 for cm in results if cm.is_covered)
+        logger.info("매칭 완료: %d/%d 청구항 커버 (%.0f%%)", covered, len(results), covered / max(len(results), 1) * 100)
 
         return sorted(results, key=lambda cm: cm.claim_number)
 
@@ -156,6 +185,7 @@ class Matcher:
     ) -> ClaimMatch:
         # 1순위: primary ref가 이 종속항을 커버하는지 확인 (재사용 우선)
         if primary_cand and node.number in primary_cand.covers_claims:
+            logger.debug("    청구항 %d → primary ref 재사용 (%s)", node.number, primary_cand.doc_id[:20])
             return ClaimMatch(
                 claim_number=node.number,
                 is_independent=False,
@@ -166,7 +196,6 @@ class Matcher:
         # 2순위: 별도 후보에서 선택
         claim_cands = [c for c in cands.values() if node.number in c.covers_claims]
         if not claim_cands:
-            # 커버하는 문헌 없음 — primary ref를 그대로 유지
             if primary_cand:
                 return ClaimMatch(
                     claim_number=node.number,
@@ -176,7 +205,6 @@ class Matcher:
                 )
             return ClaimMatch(claim_number=node.number, is_independent=False, is_covered=False)
 
-        # primary 제외하고 secondary 선택
         primary_uid = primary_cand.uid if primary_cand else ""
         secondaries_pool = [c for c in claim_cands if c.uid != primary_uid]
         secondaries = self._select_by_band(secondaries_pool, total_claims, n=self.max_refs - 1)
@@ -198,6 +226,10 @@ class Matcher:
             return []
         max_score = max(c.score for c in candidates)
         band = [c for c in candidates if c.score >= max_score - self.tolerance_band]
+        logger.debug(
+            "허용 오차 밴드: 전체 %d개 → 밴드 내 %d개 (max=%.3f, band>=%.3f)",
+            len(candidates), len(band), max_score, max_score - self.tolerance_band,
+        )
 
         def adjusted(c: CandidateDoc) -> float:
             coverage_ratio = len(c.covers_claims) / max(total_claims, 1)

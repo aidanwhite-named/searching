@@ -17,3 +17,10 @@ config.yaml
 # IDE
 .idea/
 .vscode/
+
+# 런타임
+uploads/
+*.log
+
+# Claude Code
+.claude/

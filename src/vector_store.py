@@ -7,6 +7,9 @@ from qdrant_client.models import (
     Filter, FieldCondition, MatchValue, MatchAny,
 )
 from src.chunker import Chunk
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class VectorStore:
@@ -32,21 +35,18 @@ class VectorStore:
         qdrant_url = os.getenv("QDRANT_URL", "")
 
         if qdrant_url:
-            # 환경변수로 원격 서버 지정
-            print(f"[vector_store] 원격 Qdrant 서버 연결: {qdrant_url}")
+            logger.info("원격 Qdrant 서버 연결: %s", qdrant_url)
             self.client = QdrantClient(url=qdrant_url)
             self.mode = "remote"
 
         elif mode == "memory":
-            # ── 인메모리: 세션마다 깔끔하게 초기화 ──────────────────────────
-            print("[vector_store] 인메모리 Qdrant 초기화 (세션 종료 시 자동 삭제)")
+            logger.info("인메모리 Qdrant 초기화 (세션 종료 시 자동 삭제)")
             self.client = QdrantClient(":memory:")
 
         else:
-            # ── 로컬 디스크 영구 저장 ────────────────────────────────────────
             local_path = os.path.join(cache_dir, "db")
             os.makedirs(local_path, exist_ok=True)
-            print(f"[vector_store] 로컬 Qdrant 저장소: {local_path}")
+            logger.info("로컬 Qdrant 저장소: %s", local_path)
             self.client = QdrantClient(path=local_path)
 
         self._ensure_collection()
@@ -58,19 +58,21 @@ class VectorStore:
         try:
             existing = {c.name for c in self.client.get_collections().collections}
             if self.collection_name not in existing:
-                print(
-                    f"[vector_store] 컬렉션 '{self.collection_name}' 생성 "
-                    f"(dim={self.dimension}, metric=COSINE)"
+                logger.info(
+                    "컬렉션 '%s' 생성 (dim=%d, metric=COSINE)",
+                    self.collection_name, self.dimension,
                 )
                 self.client.create_collection(
                     collection_name=self.collection_name,
                     vectors_config=VectorParams(
                         size=self.dimension,
-                        distance=Distance.COSINE,   # C++ 엔진이 코사인 유사도 계산
+                        distance=Distance.COSINE,
                     ),
                 )
+            else:
+                logger.debug("컬렉션 '%s' 기존 것 재사용", self.collection_name)
         except Exception as e:
-            print(f"[vector_store] 컬렉션 생성 오류: {e}")
+            logger.error("컬렉션 생성 오류: %s", e)
 
     # ── 청크 색인 ─────────────────────────────────────────────────────────────
 
@@ -99,9 +101,9 @@ class VectorStore:
 
         try:
             self.client.upsert(collection_name=self.collection_name, points=points)
-            print(f"[vector_store] {len(chunks)}개 청크 색인 완료.")
+            logger.info("%d개 청크 색인 완료 (총 %d개)", len(chunks), self.count())
         except Exception as e:
-            print(f"[vector_store] upsert 오류: {e}")
+            logger.error("upsert 오류: %s", e)
 
     # ── 유사도 검색 ───────────────────────────────────────────────────────────
 
@@ -128,8 +130,11 @@ class VectorStore:
                 limit=k,
             )
         except Exception as e:
-            print(f"[vector_store] 검색 오류: {e}")
+            logger.error("검색 오류: %s", e)
             return []
+
+        logger.debug("벡터 검색: k=%d → %d개 반환, 최고 점수=%.3f",
+                     k, len(hits), hits[0].score if hits else 0.0)
 
         results = []
         for hit in hits:
@@ -163,7 +168,7 @@ class VectorStore:
         """컬렉션의 모든 벡터를 삭제하고 빈 컬렉션으로 초기화한다."""
         try:
             self.client.delete_collection(self.collection_name)
-            print(f"[vector_store] 컬렉션 '{self.collection_name}' 초기화 완료.")
+            logger.info("컬렉션 '%s' 초기화 완료", self.collection_name)
         except Exception:
             pass
         self._ensure_collection()

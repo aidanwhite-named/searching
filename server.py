@@ -1,13 +1,25 @@
 import os
+import sys
+import io
 import json
 import uuid
 import traceback
 import threading
 from contextlib import asynccontextmanager
+
+# Windows 터미널 UTF-8 출력 강제 (✓/✗ 등 특수문자 CP949 인코딩 오류 방지)
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+
+from src.logger import setup_logging, get_logger
+_log_level = "DEBUG" if "--debug" in __import__("sys").argv else "INFO"
+setup_logging(level=_log_level)
+logger = get_logger(__name__)
 
 from src.config_manager import ConfigManager
 from src.llm_router import LLMRouter
@@ -38,7 +50,7 @@ async def lifespan(app: FastAPI):
     global _cfg, _router, _preprocessor, _claims_parser
     global _cache, _rag, _matcher, _checker, _formatter
 
-    print("[startup] 설정 및 경량 컴포넌트 초기화...")
+    logger.info("설정 및 경량 컴포넌트 초기화...")
     _cfg          = ConfigManager()
     _router       = LLMRouter(_cfg)
     _preprocessor = PatentPreprocessor(router=_router)
@@ -51,13 +63,13 @@ async def lifespan(app: FastAPI):
     _checker   = HallucinationChecker()
     _formatter = OutputFormatter()
 
-    print("[startup] 임베딩/리랭커 모델 로드 중 (최초 실행 시 다운로드 포함)...")
+    logger.info("임베딩/리랭커 모델 로드 중 (최초 실행 시 다운로드 포함)...")
     _rag = RAGPipeline(_cfg)   # Embedder + Reranker 여기서 딱 한 번만 로드
-    print("[startup] 모든 컴포넌트 준비 완료. 서버 요청 수신 시작.")
+    logger.info("모든 컴포넌트 준비 완료. 서버 요청 수신 시작.")
 
     yield  # 서버 실행 구간
 
-    print("[shutdown] 서버 종료.")
+    logger.info("서버 종료.")
 
 
 app = FastAPI(title="특허 선행기술조사 시스템 웹 대시보드", lifespan=lifespan)
@@ -136,13 +148,26 @@ def run_patent_analysis(task_id, pdf_path, tolerance, max_refs, no_llm, target_c
             max_per_db=_cfg.get("search", "max_results", default=10)
         )
 
+        total_hits = sum(len(cr.results) for cr in search_results)
+        logger.info("[task %s] 외부 DB 검색 완료: 총 %d건", task_id[:8], total_hits)
         tasks[task_id]["progress"] = 55
-        tasks[task_id]["message"] = "외부 DB 검색 완료. RAG 인덱스 구축 및 유사 청크 벡터 검색 중..."
+        tasks[task_id]["message"] = f"외부 DB 검색 완료 ({total_hits}건). RAG 인덱스 구축 및 유사 청크 벡터 검색 중..."
+
+        if total_hits == 0:
+            # 어느 프로바이더에서 결과가 나왔는지 로그로 남기고 사용자에게 상세 안내
+            for cr in search_results:
+                logger.warning("[task %s] 청구항 %d: 검색 결과 0건 (쿼리=%s)",
+                               task_id[:8], cr.claim_number,
+                               cr.query.boolean_query or str(cr.query.keywords))
+            raise Exception(
+                "외부 DB 검색 결과가 0건입니다. "
+                "KIPRIS/EPO API 키 설정을 확인하거나, Gemini CLI가 정상 동작하는지 확인하세요."
+            )
 
         # 3. Build RAG Index (force_rebuild=True: 요청마다 새 문서로 인덱스 재구성)
         n_chunks = _rag.build_index(search_results, _cache, force_rebuild=True)
         if n_chunks == 0:
-            raise Exception("인덱싱할 문서를 찾지 못했거나 외부 검색 결과가 비어 있습니다.")
+            raise Exception("문서 청킹 결과가 0개입니다. 검색된 문서에 텍스트가 없을 수 있습니다.")
 
         tasks[task_id]["progress"] = 70
         tasks[task_id]["message"] = "로컬 RAG 문서 데이터 베이스 구축 완료. 특허 청구항 거절논리 매칭 중..."
@@ -214,8 +239,7 @@ def run_patent_analysis(task_id, pdf_path, tolerance, max_refs, no_llm, target_c
         
     except Exception as e:
         error_msg = str(e)
-        print(f"Error in analysis task {task_id}: {error_msg}")
-        traceback.print_exc()
+        logger.error("분석 작업 실패 (task=%s): %s", task_id, error_msg, exc_info=True)
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = error_msg
         tasks[task_id]["message"] = f"오류 발생: {error_msg}"
@@ -342,4 +366,6 @@ def read_root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="127.0.0.1", port=8001, reload=True)
+    debug_mode = "--debug" in __import__("sys").argv
+    # debug 모드에서는 reload=False (자식 프로세스 없이 로그가 바로 터미널에 찍힘)
+    uvicorn.run("server:app", host="127.0.0.1", port=8001, reload=not debug_mode)

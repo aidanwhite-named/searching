@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemini Search Provider — 상세 흐름 시각화</title>
+<style>
+:root {
+  --bg: #0c0e18;
+  --surface: #141624;
+  --surface2: #1c2030;
+  --surface3: #222840;
+  --border: #2a3060;
+  --border2: #3a4280;
+  --g1: #4a9eff;   /* gemini blue */
+  --g2: #34d399;   /* success green */
+  --g3: #f59e0b;   /* warning amber */
+  --g4: #ef4444;   /* error red */
+  --g5: #a78bfa;   /* purple */
+  --g6: #38bdf8;   /* sky */
+  --text: #dde4f8;
+  --dim: #7880a8;
+  --bright: #ffffff;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ── scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* ── header ── */
+.header {
+  background: linear-gradient(135deg, #141624 0%, #0c0e18 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 22px 36px 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.header-icon {
+  width: 52px; height: 52px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(74,158,255,0.25), rgba(168,139,250,0.15));
+  border: 1px solid rgba(74,158,255,0.3);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px;
+  flex-shrink: 0;
+}
+
+.header-text h1 { font-size: 20px; font-weight: 700; color: var(--bright); }
+.header-text p  { font-size: 12px; color: var(--dim); margin-top: 3px; }
+
+.header-badges { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+
+.badge {
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid;
+}
+
+.badge-blue   { border-color: rgba(74,158,255,0.5);  color: var(--g1); background: rgba(74,158,255,0.08); }
+.badge-green  { border-color: rgba(52,211,153,0.5);  color: var(--g2); background: rgba(52,211,153,0.08); }
+.badge-amber  { border-color: rgba(245,158,11,0.5);  color: var(--g3); background: rgba(245,158,11,0.08); }
+.badge-purple { border-color: rgba(167,139,250,0.5); color: var(--g5); background: rgba(167,139,250,0.08); }
+.badge-sky    { border-color: rgba(56,189,248,0.5);  color: var(--g6); background: rgba(56,189,248,0.08); }
+
+/* ── content layout ── */
+.content { padding: 28px 36px; max-width: 1100px; }
+
+/* ── section ── */
+.section { margin-bottom: 40px; }
+.section-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--bright);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.section-title::before {
+  content: '';
+  width: 4px; height: 18px;
+  border-radius: 2px;
+  background: var(--g1);
+  flex-shrink: 0;
+}
+
+/* ── main flow diagram ── */
+.flow-diagram {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.flow-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  position: relative;
+}
+
+.flow-node {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 18px;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.flow-node:hover { border-color: var(--g1); box-shadow: 0 0 0 1px rgba(74,158,255,0.2); }
+.flow-node.active { border-color: var(--g1); box-shadow: 0 0 20px rgba(74,158,255,0.15); }
+
+.flow-node .fn-icon { font-size: 22px; margin-bottom: 6px; }
+.flow-node .fn-title { font-size: 13px; font-weight: 600; color: var(--bright); }
+.flow-node .fn-sub   { font-size: 11px; color: var(--dim); margin-top: 2px; }
+
+.flow-arrow {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  color: var(--dim);
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.flow-vline {
+  width: 2px;
+  min-height: 24px;
+  background: linear-gradient(to bottom, var(--border), var(--border));
+  margin: 0 auto;
+  position: relative;
+}
+
+.flow-vline::after {
+  content: '▼';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--dim);
+  font-size: 10px;
+}
+
+/* ── detail panel ── */
+.detail-panel {
+  display: none;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin: 10px 0 4px;
+  animation: slideDown 0.2s ease;
+}
+
+.detail-panel.open { display: block; }
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── grid ── */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+@media (max-width: 700px) {
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+
+/* ── card ── */
+.card {
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.card h4 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 10px;
+}
+
+.card ul {
+  list-style: none;
+  font-size: 12px;
+  color: var(--dim);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.card ul li::before { content: '›  '; }
+.card ul li .hi { color: var(--text); font-weight: 500; }
+
+/* ── code ── */
+.code {
+  background: #090b14;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 12px 14px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-x: auto;
+  tab-size: 2;
+}
+
+.kw  { color: #c792ea; }
+.fn  { color: #82aaff; }
+.st  { color: #c3e88d; }
+.cm  { color: #4a5570; font-style: italic; }
+.nm  { color: #f78c6c; }
+.op  { color: #89ddff; }
+.var { color: #eeffff; }
+
+/* ── prompt box ── */
+.prompt-box {
+  background: #090b14;
+  border: 1px solid rgba(74,158,255,0.3);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 12px;
+  line-height: 1.7;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.prompt-field { color: var(--g3); }
+.prompt-value { color: var(--g2); }
+.prompt-json  { color: var(--g6); }
+.prompt-comment { color: var(--dim); font-style: italic; }
+
+/* ── mode selector ── */
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  margin-bottom: 16px;
+  width: fit-content;
+}
+
+.mode-tab {
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--dim);
+}
+
+.mode-tab.active {
+  background: var(--g1);
+  color: #000;
+}
+
+.mode-tab:not(.active):hover { background: var(--surface2); color: var(--text); }
+
+.mode-content { display: none; }
+.mode-content.active { display: block; }
+
+/* ── json parser viz ── */
+.parser-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.parser-step {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.parser-step-num {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.parser-step-body { flex: 1; }
+.parser-step-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.parser-step-desc  { font-size: 12px; color: var(--dim); margin-bottom: 8px; }
+
+.step-try  { background: rgba(74,158,255,0.15);  color: var(--g1); border: 1px solid rgba(74,158,255,0.3); }
+.step-ok   { background: rgba(52,211,153,0.15);  color: var(--g2); border: 1px solid rgba(52,211,153,0.3); }
+.step-fail { background: rgba(239,68,68,0.15);   color: var(--g4); border: 1px solid rgba(239,68,68,0.3); }
+.step-rec  { background: rgba(245,158,11,0.15);  color: var(--g3); border: 1px solid rgba(245,158,11,0.3); }
+
+/* ── result card ── */
+.result-card {
+  background: var(--surface3);
+  border: 1px solid rgba(52,211,153,0.3);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 12px;
+}
+
+.result-card .rc-field {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.rc-key   { color: var(--g1); font-weight: 600; width: 80px; flex-shrink: 0; }
+.rc-value { color: var(--text); }
+
+/* ── subprocess diagram ── */
+.subprocess-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sp-box {
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 14px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.sp-arrow { color: var(--dim); font-size: 14px; flex-shrink: 0; }
+.sp-label { font-size: 11px; color: var(--dim); }
+
+/* ── timeline ── */
+.timeline {
+  position: relative;
+  padding-left: 24px;
+}
+
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 6px; top: 8px; bottom: 8px;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--g1), var(--g5));
+  border-radius: 2px;
+}
+
+.tl-item {
+  position: relative;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.tl-item::before {
+  content: '';
+  position: absolute;
+  left: -20px; top: 14px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--g1);
+}
+
+.tl-time { font-size: 11px; color: var(--g3); font-weight: 600; margin-bottom: 3px; }
+.tl-title { font-weight: 600; color: var(--bright); margin-bottom: 3px; }
+.tl-desc  { color: var(--dim); }
+
+/* ── interactive demo ── */
+.demo-section {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 4px;
+}
+
+.demo-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.demo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.demo-field label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+}
+
+.demo-field input, .demo-field select {
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.demo-field input:focus, .demo-field select:focus { border-color: var(--g1); }
+
+.btn {
+  padding: 8px 18px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid;
+  transition: all 0.15s;
+  background: transparent;
+  font-family: inherit;
+  height: 34px;
+  display: flex; align-items: center; gap: 6px;
+}
+
+.btn-blue   { border-color: var(--g1); color: var(--g1); }
+.btn-green  { border-color: var(--g2); color: var(--g2); }
+.btn-amber  { border-color: var(--g3); color: var(--g3); }
+
+.btn:hover  { filter: brightness(1.2); transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+
+/* ── animated flow lines ── */
+@keyframes flow {
+  0%   { stroke-dashoffset: 20; }
+  100% { stroke-dashoffset: 0; }
+}
+
+.flow-line-animated {
+  stroke-dasharray: 6 3;
+  animation: flow 1s linear infinite;
+}
+
+/* ── error/success state ── */
+.state-ok   { color: var(--g2); }
+.state-warn { color: var(--g3); }
+.state-err  { color: var(--g4); }
+
+/* ── tooltip ── */
+.tooltip-wrap { position: relative; display: inline-block; }
+.tooltip-wrap:hover .tooltip { display: block; }
+.tooltip {
+  display: none;
+  position: absolute;
+  bottom: 120%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* ── limit tags ── */
+.limit-tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(245,158,11,0.15);
+  color: var(--g3);
+  border: 1px solid rgba(245,158,11,0.3);
+  margin-left: 4px;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon">🔎</div>
+  <div class="header-text">
+    <h1>Gemini Search Provider — 상세 흐름 시각화</h1>
+    <p>providers/gemini_search_provider.py · src/llm_router.py</p>
+    <div class="header-badges">
+      <span class="badge badge-blue">Google Patents 웹 검색</span>
+      <span class="badge badge-amber">최대 300초 타임아웃</span>
+      <span class="badge badge-green">잘린 JSON 부분 복구</span>
+      <span class="badge badge-purple">API / CLI 이중 모드</span>
+      <span class="badge badge-sky">KIPRIS·EPO 키 없어도 동작</span>
+    </div>
+  </div>
+</div>
+
+<div class="content">
+
+<!-- ══════════════════════════════════
+     SECTION 1: 전체 흐름
+══════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">전체 실행 흐름 (클릭하여 세부사항 확인)</div>
+
+  <div class="flow-diagram">
+
+    <!-- Node 1: 진입 분기 -->
+    <div class="flow-row">
+      <div class="flow-node" style="width:100%;max-width:680px;" onclick="togglePanel('p1')">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div class="fn-icon">🔀</div>
+          <div>
+            <div class="fn-title">진입점: 특허번호 vs 청구항 텍스트 분기</div>
+            <div class="fn-sub">GeminiSearchProvider.search() → patent_number 유무로 프롬프트 결정</div>
+          </div>
+          <div style="margin-left:auto;font-size:11px;color:var(--dim);">▼</div>
+        </div>
+      </div>
+    </div>
+    <div id="p1" class="detail-panel">
+      <div class="grid-2">
+        <div>
+          <div style="font-size:12px;font-weight:700;color:var(--g1);margin-bottom:10px;">경로 A — 특허번호 기반</div>
+          <div class="card" style="border-color:rgba(74,158,255,0.3);">
+            <ul>
+              <li><span class="hi">조건</span>: self.patent_number 가 설정됨</li>
+              <li><span class="hi">프롬프트</span>: _SEARCH_PROMPT_BY_NUMBER</li>
+              <li>단계 1: 웹 검색으로 특허 내용 파악</li>
+              <li>단계 2: 파악된 내용 기반 선행특허 검색</li>
+              <li>IPC/CPC 코드 최대 <span class="hi">6개</span> 전달</li>
+            </ul>
+          </div>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:700;color:var(--g5);margin-bottom:10px;">경로 B — 청구항 텍스트 기반</div>
+          <div class="card" style="border-color:rgba(167,139,250,0.3);">
+            <ul>
+              <li><span class="hi">조건</span>: patent_number 가 비어있음</li>
+              <li><span class="hi">프롬프트</span>: _SEARCH_PROMPT_BY_CLAIM</li>
+              <li>청구항 전문 직접 전달</li>
+              <li>텍스트 최대 <span class="hi">1,500자</span> 잘림 처리</li>
+              <li>IPC 코드 없이 기술 내용만으로 검색</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="code" style="margin-top:14px;">
+<span class="kw">if</span> <span class="op">self</span>.patent_number:
+    prompt <span class="op">=</span> _SEARCH_PROMPT_BY_NUMBER.<span class="fn">format</span>(
+        patent_number<span class="op">=</span><span class="op">self</span>.patent_number,
+        cutoff_date<span class="op">=</span>cutoff_date,
+        limit<span class="op">=</span>limit,
+        ipc_codes<span class="op">=</span><span class="st">", "</span>.<span class="fn">join</span>(<span class="op">self</span>.ipc_codes[:<span class="nm">6</span>]) <span class="op">or</span> <span class="st">"미추출"</span>,
+    )
+<span class="kw">else</span>:
+    prompt <span class="op">=</span> _SEARCH_PROMPT_BY_CLAIM.<span class="fn">format</span>(
+        cutoff_date<span class="op">=</span>cutoff_date,
+        limit<span class="op">=</span>limit,
+        claim_text<span class="op">=</span>claim_text[:<span class="nm">1500</span>],   <span class="cm"># 토큰 초과 방지</span>
+    )</div>
+    </div>
+
+    <div style="display:flex;justify-content:center;padding:4px 0;">
+      <div class="flow-vline" style="min-height:28px;"></div>
+    </div>
+
+    <!-- Node 2: 프롬프트 구조 -->
+    <div class="flow-row">
+      <div class="flow-node" style="width:100%;max-width:680px;" onclick="togglePanel('p2')">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div class="fn-icon">📝</div>
+          <div>
+            <div class="fn-title">프롬프트 구성 &amp; 검색 대상 지정</div>
+            <div class="fn-sub">Google Patents / Justia / Espacenet / USPTO — 기준일 필터 포함</div>
+          </div>
+          <div style="margin-left:auto;font-size:11px;color:var(--dim);">▼</div>
+        </div>
+      </div>
+    </div>
+    <div id="p2" class="detail-panel">
+      <div class="mode-tabs">
+        <div class="mode-tab active" onclick="switchMode('prompt', 'number', this)">특허번호 기반 프롬프트</div>
+        <div class="mode-tab" onclick="switchMode('prompt', 'claim', this)">청구항 기반 프롬프트</div>
+      </div>
+      <div id="prompt-number" class="mode-content active">
+        <div class="prompt-box"><span class="prompt-field">특허번호 {patent_number}</span>에 대한 선행기술조사를 수행하세요.
+
+<span class="prompt-comment">▶ 단계 1: 웹 검색으로 특허 파악</span>
+먼저 웹 검색으로 특허번호 <span class="prompt-field">{patent_number}</span>를 Google Patents 또는 KIPRIS에서
+조회하여 이 특허의 발명 내용과 청구항을 파악하세요.
+
+<span class="prompt-comment">▶ 단계 2: 선행특허 검색</span>
+파악한 발명 내용을 바탕으로, 기준일 <span class="prompt-field">{cutoff_date}</span> 이전에 출원된
+선행특허를 Google Patents, Justia, Espacenet, USPTO에서 최대 <span class="prompt-field">{limit}</span>건 검색하세요.
+참고 IPC/CPC 코드: <span class="prompt-field">{ipc_codes}</span>
+
+<span class="prompt-comment">▶ JSON 출력 형식</span>
+<span class="prompt-json">{
+  "results": [
+    {
+      "doc_id": "US10123456B2",
+      "title": "발명 제목",
+      "abstract": "핵심 내용 1~2문장 이내",   ← 100자 이내 영어
+      "pub_date": "YYYY-MM-DD",
+      "url": "https://patents.google.com/...",
+      "source": "google_patents"
+    }
+  ]
+}</span></div>
+      </div>
+      <div id="prompt-claim" class="mode-content">
+        <div class="prompt-box"><span class="prompt-comment">▶ 기술 내용 기반 직접 검색</span>
+아래 특허 청구항과 기술적으로 관련된 선행특허를
+Google Patents, Justia, Espacenet에서 웹 검색 도구로 직접 찾아주세요.
+
+기준일: <span class="prompt-field">{cutoff_date}</span> 이전 출원/공개 문헌만 포함
+검색 수: 최대 <span class="prompt-field">{limit}</span>건
+
+<span class="prompt-comment">▶ 청구항 (최대 1,500자)</span>
+<span class="prompt-field">{claim_text[:1500]}</span>
+
+<span class="prompt-json">{
+  "results": [ ... ]    ← 동일한 JSON 형식
+}</span></div>
+      </div>
+      <div style="margin-top:12px;padding:10px 14px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.2);border-radius:7px;font-size:12px;color:var(--dim);">
+        ⚠ <strong style="color:var(--g3)">중요 제약</strong>: abstract 반드시 100자 이내 영어 · 실제로 존재하는 특허번호만 포함 (환각 방지 명시)
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:center;padding:4px 0;">
+      <div class="flow-vline" style="min-height:28px;"></div>
+    </div>
+
+    <!-- Node 3: LLM Router -->
+    <div class="flow-row">
+      <div class="flow-node" style="width:100%;max-width:680px;" onclick="togglePanel('p3')">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div class="fn-icon">⚡</div>
+          <div>
+            <div class="fn-title">LLM Router — API 모드 / CLI subprocess 모드</div>
+            <div class="fn-sub">router.call(prompt, timeout=300) → Gemini Google 검색 내장 도구 실행</div>
+          </div>
+          <div style="margin-left:auto;font-size:11px;color:var(--dim);">▼</div>
+        </div>
+      </div>
+    </div>
+    <div id="p3" class="detail-panel">
+      <div class="mode-tabs">
+        <div class="mode-tab active" onclick="switchMode('llm', 'api', this)">API 모드</div>
+        <div class="mode-tab" onclick="switchMode('llm', 'cli', this)">CLI subprocess 모드</div>
+      </div>
+
+      <div id="llm-api" class="mode-content active">
+        <div class="grid-2">
+          <div>
+            <div class="card">
+              <h4 style="color:var(--g1)">google.generativeai API</h4>
+              <div class="code">
+<span class="kw">import</span> google.generativeai <span class="kw">as</span> genai
+genai.<span class="fn">configure</span>(api_key<span class="op">=</span><span class="op">self</span>.api_key)
+model <span class="op">=</span> genai.<span class="fn">GenerativeModel</span>(<span class="op">self</span>.model)
+<span class="cm"># config.yaml: llm.model = gemini-2.0-flash</span>
+response <span class="op">=</span> model.<span class="fn">generate_content</span>(
+    prompt,
+    generation_config<span class="op">=</span>{<span class="st">"max_output_tokens"</span>: max_tokens}
+)</div>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <h4 style="color:var(--g2)">API 모드 조건</h4>
+              <ul>
+                <li>config.yaml의 <span class="hi">llm.api_key</span> 설정 시</li>
+                <li>기본 모델: <span class="hi">gemini-2.0-flash</span></li>
+                <li>system prompt 있으면 앞에 붙여서 전달</li>
+                <li>max_tokens: <span class="hi">4096</span> (기본)</li>
+                <li>Gemini 내장 웹 검색 도구 활용</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="llm-cli" class="mode-content">
+        <div class="subprocess-flow">
+          <div style="font-size:12px;font-weight:700;color:var(--g3);margin-bottom:8px;">CLI subprocess 실행 흐름 (Windows)</div>
+          <div class="sp-row">
+            <div class="sp-box" style="border-color:rgba(74,158,255,0.4);color:var(--g1);">Python 프로세스</div>
+            <div class="sp-arrow">→</div>
+            <div class="sp-box"><code>cmd.exe /c gemini --approval-mode yolo -p ""</code></div>
+            <div class="sp-label">+ stdin으로 프롬프트 전달</div>
+          </div>
+          <div style="padding:0 0 0 90px;">
+            <div class="sp-row" style="gap:6px;">
+              <div class="sp-arrow">↓</div>
+              <div class="sp-box" style="border-color:rgba(52,211,153,0.4);color:var(--g2);">Gemini CLI 실행</div>
+              <div class="sp-label">Google 검색 도구 내장, approval-mode yolo로 자동 승인</div>
+            </div>
+          </div>
+          <div style="padding:0 0 0 90px;">
+            <div class="sp-row" style="gap:6px;">
+              <div class="sp-arrow">↓</div>
+              <div class="sp-box" style="border-color:rgba(245,158,11,0.4);color:var(--g3);">stdout 수신</div>
+              <div class="sp-label">UTF-8 → CP949 → EUC-KR 순 디코딩 시도</div>
+            </div>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:14px;">
+          <div class="card">
+            <h4 style="color:var(--g3)">Windows 특수 처리</h4>
+            <ul>
+              <li>명령줄 길이 제한 (<span class="hi">WinError 206</span>) 우회</li>
+              <li>프롬프트를 <span class="hi">stdin</span>으로 전달</li>
+              <li><code>cmd.exe /c</code> 경유 실행 (.cmd 파일)</li>
+              <li><span class="hi">shutil.which</span>로 .cmd 파일 우선 탐색</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h4 style="color:var(--g5)">환경 설정</h4>
+            <ul>
+              <li>실행 CWD: <span class="hi">~(홈)</span> 디렉토리</li>
+              <li>→ CLAUDE.md 등 컨텍스트 로드 방지</li>
+              <li>NO_COLOR=1, TERM=xterm-256color</li>
+              <li>타임아웃: <span class="hi">300초</span> (5분)</li>
+            </ul>
+          </div>
+          <div class="card" style="grid-column:1/-1;">
+            <h4 style="color:var(--g1)">CLI 명령 생성 코드</h4>
+            <div class="code">
+<span class="cm"># gemini: 프롬프트를 stdin으로 전달 (WinError 206 방지)</span>
+<span class="kw">if</span> <span class="op">self</span>.agent <span class="op">==</span> <span class="st">"gemini"</span>:
+    <span class="kw">return</span> [exe, <span class="st">"--approval-mode"</span>, <span class="st">"yolo"</span>, <span class="st">"-p"</span>, <span class="st">""</span>], prompt.<span class="fn">encode</span>(<span class="st">"utf-8"</span>)
+    <span class="cm">#       ↑ cmd 인수에 프롬프트 없음   ↑ stdin으로 전달</span>
+
+<span class="cm"># Windows: .cmd 파일은 cmd.exe /c 경유</span>
+<span class="kw">if</span> sys.platform <span class="op">==</span> <span class="st">"win32"</span>:
+    run_kwargs[<span class="st">"args"</span>] <span class="op">=</span> [comspec, <span class="st">"/c"</span>] <span class="op">+</span> cmd</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:center;padding:4px 0;">
+      <div class="flow-vline" style="min-height:28px;"></div>
+    </div>
+
+    <!-- Node 4: JSON 파싱 -->
+    <div class="flow-row">
+      <div class="flow-node" style="width:100%;max-width:680px;" onclick="togglePanel('p4')">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div class="fn-icon">🧩</div>
+          <div>
+            <div class="fn-title">3단계 JSON 파싱 + 잘린 응답 복구</div>
+            <div class="fn-sub">마크다운 펜스 → 완전한 JSON → 잘린 JSON 부분 복구 순서로 시도</div>
+          </div>
+          <div style="margin-left:auto;font-size:11px;color:var(--dim);">▼</div>
+        </div>
+      </div>
+    </div>
+    <div id="p4" class="detail-panel">
+      <div class="parser-steps">
+
+        <div class="parser-step">
+          <div class="parser-step-num step-try">1</div>
+          <div class="parser-step-body">
+            <div class="parser-step-title" style="color:var(--g1);">마크다운 코드 펜스 내 JSON 추출</div>
+            <div class="parser-step-desc">LLM이 응답을 ```json ... ``` 블록으로 감쌌을 때</div>
+            <div class="code">m <span class="op">=</span> re.<span class="fn">search</span>(<span class="st">r"```(?:json)?\s*(\{[^`]*\})\s*```"</span>, text, re.DOTALL)
+<span class="kw">if</span> m:
+    <span class="kw">return</span> json.<span class="fn">loads</span>(m.<span class="fn">group</span>(<span class="nm">1</span>))   <span class="cm"># 성공 시 여기서 반환</span></div>
+          </div>
+        </div>
+
+        <div class="parser-step">
+          <div class="parser-step-num step-try" style="background:rgba(167,139,250,0.15);color:var(--g5);border-color:rgba(167,139,250,0.3);">2</div>
+          <div class="parser-step-body">
+            <div class="parser-step-title" style="color:var(--g5);">균형 중괄호 탐색으로 완전한 JSON 객체 추출</div>
+            <div class="parser-step-desc">코드 펜스 없이 JSON을 바로 출력했을 때 — depth 카운터로 중괄호 매칭</div>
+            <div class="code"><span class="kw">def</span> <span class="fn">_find_balanced</span>(text, start):
+    depth <span class="op">=</span> <span class="nm">0</span>
+    <span class="kw">for</span> i, ch <span class="kw">in</span> <span class="fn">enumerate</span>(text[start:], start):
+        <span class="kw">if</span>   ch <span class="op">==</span> <span class="st">"{"</span>: depth <span class="op">+=</span> <span class="nm">1</span>
+        <span class="kw">elif</span> ch <span class="op">==</span> <span class="st">"}"</span>: depth <span class="op">-=</span> <span class="nm">1</span>
+        <span class="kw">if</span> depth <span class="op">==</span> <span class="nm">0</span>: <span class="kw">return</span> i   <span class="cm"># 매칭되는 닫는 괄호 위치</span>
+    <span class="kw">return</span> <span class="op">-</span><span class="nm">1</span>
+
+start <span class="op">=</span> text.<span class="fn">find</span>(<span class="st">"{"</span>)
+end   <span class="op">=</span> <span class="fn">_find_balanced</span>(text, start)
+<span class="kw">return</span> json.<span class="fn">loads</span>(text[start:end<span class="op">+</span><span class="nm">1</span>])</div>
+          </div>
+        </div>
+
+        <div class="parser-step">
+          <div class="parser-step-num step-rec">3</div>
+          <div class="parser-step-body">
+            <div class="parser-step-title" style="color:var(--g3);">잘린 JSON 부분 복구 (토큰 한도 초과 대응)</div>
+            <div class="parser-step-desc">응답이 도중에 끊겼을 때 — "results" 배열에서 완성된 객체만 하나씩 추출</div>
+            <div class="code"><span class="cm"># "results" 배열 위치 찾기</span>
+results_pos  <span class="op">=</span> text.<span class="fn">find</span>(<span class="st">'"results"'</span>)
+array_start  <span class="op">=</span> text.<span class="fn">find</span>(<span class="st">"["</span>, results_pos)
+
+recovered <span class="op">=</span> []
+pos <span class="op">=</span> array_start <span class="op">+</span> <span class="nm">1</span>
+<span class="kw">while</span> pos <span class="op">&lt;</span> <span class="fn">len</span>(text):
+    obj_start <span class="op">=</span> text.<span class="fn">find</span>(<span class="st">"{"</span>, pos)
+    obj_end   <span class="op">=</span> <span class="fn">_find_balanced</span>(text, obj_start)
+    <span class="kw">if</span> obj_end <span class="op">==</span> <span class="nm">-1</span>: <span class="kw">break</span>    <span class="cm"># 마지막 미완성 객체 → 버림</span>
+    recovered.<span class="fn">append</span>(json.<span class="fn">loads</span>(text[obj_start:obj_end<span class="op">+</span><span class="nm">1</span>]))
+    pos <span class="op">=</span> obj_end <span class="op">+</span> <span class="nm">1</span>
+
+<span class="kw">return</span> {<span class="st">"results"</span>: recovered}   <span class="cm"># 완성된 것만 살림</span></div>
+            <div style="margin-top:10px;padding:8px 12px;background:rgba(245,158,11,0.08);border-radius:6px;font-size:12px;color:var(--dim);">
+              ⚠ <span style="color:var(--g3)">logger.warning("잘린 JSON 부분 복구: N건")</span> 로그 출력 후 계속 진행
+            </div>
+          </div>
+        </div>
+
+        <div class="parser-step">
+          <div class="parser-step-num step-fail">✗</div>
+          <div class="parser-step-body">
+            <div class="parser-step-title" style="color:var(--g4);">3단계 모두 실패 → 빈 리스트 반환</div>
+            <div class="parser-step-desc">ValueError 발생 시 error 로그 후 [] 반환, 파이프라인 계속 진행</div>
+            <div class="code">
+<span class="kw">except</span> (ValueError, json.JSONDecodeError) <span class="kw">as</span> e:
+    logger.<span class="fn">error</span>(<span class="st">"Gemini 검색 JSON 파싱 실패: %s"</span>, e)
+    logger.<span class="fn">debug</span>(<span class="st">"응답 앞부분: %s"</span>, response[:<span class="nm">300</span>])
+    <span class="kw">return</span> []    <span class="cm"># 다른 DB 결과는 유지됨</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:center;padding:4px 0;">
+      <div class="flow-vline" style="min-height:28px;"></div>
+    </div>
+
+    <!-- Node 5: 결과 변환 -->
+    <div class="flow-row">
+      <div class="flow-node" style="width:100%;max-width:680px;" onclick="togglePanel('p5')">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div class="fn-icon">✅</div>
+          <div>
+            <div class="fn-title">SearchResult 변환 &amp; 유효성 필터링</div>
+            <div class="fn-sub">doc_id 없는 결과 제거 → SearchResult 데이터클래스 목록 반환</div>
+          </div>
+          <div style="margin-left:auto;font-size:11px;color:var(--dim);">▼</div>
+        </div>
+      </div>
+    </div>
+    <div id="p5" class="detail-panel">
+      <div class="grid-2">
+        <div>
+          <div class="code">
+<span class="kw">for</span> item <span class="kw">in</span> data.<span class="fn">get</span>(<span class="st">"results"</span>, []):
+    doc_id <span class="op">=</span> item.<span class="fn">get</span>(<span class="st">"doc_id"</span>, <span class="st">""</span>).<span class="fn">strip</span>()
+    <span class="kw">if not</span> doc_id:
+        <span class="kw">continue</span>    <span class="cm"># doc_id 없으면 건너뜀</span>
+    results.<span class="fn">append</span>(<span class="fn">SearchResult</span>(
+        doc_id   <span class="op">=</span> doc_id,
+        title    <span class="op">=</span> item.<span class="fn">get</span>(<span class="st">"title"</span>, <span class="st">""</span>).<span class="fn">strip</span>() <span class="op">or</span> <span class="st">"Unknown Title"</span>,
+        abstract <span class="op">=</span> item.<span class="fn">get</span>(<span class="st">"abstract"</span>, <span class="st">""</span>).<span class="fn">strip</span>(),
+        pub_date <span class="op">=</span> item.<span class="fn">get</span>(<span class="st">"pub_date"</span>, <span class="st">"unknown"</span>),
+        source   <span class="op">=</span> item.<span class="fn">get</span>(<span class="st">"source"</span>, <span class="st">"gemini_search"</span>),
+        url      <span class="op">=</span> item.<span class="fn">get</span>(<span class="st">"url"</span>, <span class="st">""</span>),
+        language <span class="op">=</span> <span class="st">"en"</span>,
+    ))</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div class="result-card">
+            <div class="rc-field"><span class="rc-key">doc_id</span><span class="rc-value">US10,123,456 B2</span></div>
+            <div class="rc-field"><span class="rc-key">title</span><span class="rc-value">Battery thermal management system</span></div>
+            <div class="rc-field"><span class="rc-key">abstract</span><span class="rc-value">Cooling plate with zigzag channel for uniform temperature...</span></div>
+            <div class="rc-field"><span class="rc-key">pub_date</span><span class="rc-value">2022-03-15</span></div>
+            <div class="rc-field"><span class="rc-key">source</span><span class="rc-value">google_patents</span></div>
+            <div class="rc-field"><span class="rc-key">url</span><span class="rc-value" style="color:var(--g1);">https://patents.google.com/...</span></div>
+          </div>
+          <div style="font-size:11px;color:var(--dim);padding:4px 2px;">
+            ↑ SearchResult 데이터클래스 인스턴스<br>
+            DocumentCache.fetch_and_store() 로 로컬 캐싱 후 반환
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════
+     SECTION 2: 실행 타임라인
+══════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">실행 타임라인 (실제 소요 시간)</div>
+
+  <div class="timeline">
+    <div class="tl-item">
+      <div class="tl-time">0.0 s</div>
+      <div class="tl-title">GeminiSearchProvider.search() 진입</div>
+      <div class="tl-desc">patent_number / ipc_codes 주입 확인 (SearchPipeline.run()에서 설정)</div>
+    </div>
+    <div class="tl-item">
+      <div class="tl-time">0.0 ~ 0.1 s</div>
+      <div class="tl-title">프롬프트 포맷팅</div>
+      <div class="tl-desc">특허번호 or 청구항 텍스트 분기 → 프롬프트 문자열 생성 (즉각 완료)</div>
+    </div>
+    <div class="tl-item" style="border-color:rgba(74,158,255,0.3);">
+      <div class="tl-time">0.1 s ~ (최대 300 s)</div>
+      <div class="tl-title" style="color:var(--g1);">Gemini LLM 호출 — Google 웹 검색 실행 중</div>
+      <div class="tl-desc">Gemini가 Google Patents / Justia / Espacenet 을 실제로 웹 검색 → 결과 취합 → JSON 생성<br>
+        <span style="color:var(--g3);">⏱ 평균 30~120초, 네트워크·특허 복잡도에 따라 5분까지 가능</span>
+      </div>
+    </div>
+    <div class="tl-item">
+      <div class="tl-time">응답 수신 직후</div>
+      <div class="tl-title">응답 수신 로그</div>
+      <div class="tl-desc"><code>logger.info("Gemini 응답 수신: %.0f초, %d자", elapsed, len(response))</code></div>
+    </div>
+    <div class="tl-item">
+      <div class="tl-time">+0.01 s</div>
+      <div class="tl-title">_extract_json() — 3단계 파싱</div>
+      <div class="tl-desc">마크다운 펜스 → 완전한 JSON → 잘린 JSON 복구 순서로 시도 (CPU 연산, 즉각 완료)</div>
+    </div>
+    <div class="tl-item" style="border-color:rgba(52,211,153,0.3);">
+      <div class="tl-time">+0.01 s</div>
+      <div class="tl-title" style="color:var(--g2);">SearchResult 목록 반환</div>
+      <div class="tl-desc">DocumentCache를 통해 각 결과 로컬 저장 후 SearchPipeline으로 반환</div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════
+     SECTION 3: JSON 파싱 인터랙티브 테스트
+══════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">JSON 파서 인터랙티브 테스트</div>
+
+  <div class="demo-section">
+    <div style="font-size:12px;color:var(--dim);margin-bottom:14px;">
+      실제 _extract_json() 로직을 시뮬레이션합니다. 예시를 선택하거나 직접 입력하세요.
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="btn btn-blue"  onclick="loadExample('fence')">예시 1: 마크다운 코드 펜스</button>
+      <button class="btn btn-blue"  onclick="loadExample('plain')">예시 2: 순수 JSON</button>
+      <button class="btn btn-amber" onclick="loadExample('truncated')">예시 3: 잘린 JSON (복구)</button>
+      <button class="btn btn-amber" onclick="loadExample('broken')">예시 4: 파싱 실패</button>
+    </div>
+
+    <textarea id="jsonInput" rows="8" style="width:100%;background:#090b14;border:1px solid var(--border);border-radius:7px;padding:12px;font-size:12px;color:var(--text);font-family:'Cascadia Code',Consolas,monospace;resize:vertical;outline:none;line-height:1.6;"></textarea>
+
+    <div style="display:flex;gap:10px;margin-top:10px;">
+      <button class="btn btn-green" onclick="runParser()">▶ 파싱 실행</button>
+    </div>
+
+    <div id="parseResult" style="margin-top:14px;display:none;"></div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════
+     SECTION 4: 병렬 검색 내 위치
+══════════════════════════════════ -->
+<div class="section">
+  <div class="section-title">SearchPipeline 내 위치 — 병렬 처리 구조</div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;">
+    <div style="font-size:12px;color:var(--dim);margin-bottom:16px;">
+      ThreadPoolExecutor로 4개 DB를 동시에 실행. Gemini Search는 웹 검색으로 오래 걸리므로 다른 DB와 병렬로 진행.
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+      <div style="background:rgba(74,158,255,0.08);border:1px solid rgba(74,158,255,0.25);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:18px;margin-bottom:6px;">🇰🇷</div>
+        <div style="font-size:12px;font-weight:700;color:var(--g1);">KIPRIS</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:4px;">Boolean 쿼리<br>1~5 초</div>
+      </div>
+      <div style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.25);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:18px;margin-bottom:6px;">🇪🇺</div>
+        <div style="font-size:12px;font-weight:700;color:var(--g6);">EPO OPS</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:4px;">Boolean + CPC<br>2~10 초</div>
+      </div>
+      <div style="background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.25);border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:18px;margin-bottom:6px;">📚</div>
+        <div style="font-size:12px;font-weight:700;color:var(--g2);">OpenAlex</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:4px;">키워드 검색<br>1~3 초</div>
+      </div>
+      <div style="background:rgba(245,158,11,0.15);border:2px solid rgba(245,158,11,0.5);border-radius:8px;padding:12px;text-align:center;position:relative;">
+        <div style="position:absolute;top:-8px;left:50%;transform:translateX(-50%);background:var(--g3);color:#000;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;">지금 보는 것</div>
+        <div style="font-size:18px;margin-bottom:6px;">🔎</div>
+        <div style="font-size:12px;font-weight:700;color:var(--g3);">Gemini Search</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:4px;">Google Patents<br>30~300 초</div>
+      </div>
+    </div>
+
+    <div style="background:var(--surface2);border-radius:8px;padding:12px;font-size:12px;">
+      <div style="color:var(--dim);margin-bottom:6px;">병렬 처리 코드</div>
+      <div class="code">
+<span class="cm"># gemini_search는 항상 추가 (dbs 목록에 없어도)</span>
+all_dbs <span class="op">=</span> <span class="fn">list</span>(dbs) <span class="op">+</span> ([<span class="st">"gemini_search"</span>] <span class="kw">if</span> <span class="st">"gemini_search"</span> <span class="kw">not in</span> dbs <span class="kw">else</span> [])
+
+<span class="kw">with</span> <span class="fn">ThreadPoolExecutor</span>(max_workers<span class="op">=</span><span class="fn">len</span>(all_dbs)) <span class="kw">as</span> executor:
+    futures <span class="op">=</span> {executor.<span class="fn">submit</span>(_fetch, db): db <span class="kw">for</span> db <span class="kw">in</span> all_dbs}
+    <span class="kw">for</span> future <span class="kw">in</span> <span class="fn">as_completed</span>(futures):
+        db, hits <span class="op">=</span> future.<span class="fn">result</span>()
+        <span class="kw">for</span> hit <span class="kw">in</span> hits:
+            hit <span class="op">=</span> <span class="op">self</span>.cache.<span class="fn">fetch_and_store</span>(hit)   <span class="cm"># 로컬 캐싱</span>
+            found.<span class="fn">append</span>(hit)</div>
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--dim);">
+      → Gemini Search 결과가 늦게 와도 다른 DB 결과는 먼저 found 리스트에 추가됨.<br>
+      → <span style="color:var(--g3);">KIPRIS/EPO 키가 없을 때</span>: OpenAlex + Gemini Search 만으로도 동작 (<code>only_gemini</code> 분기).
+    </div>
+  </div>
+</div>
+
+
+</div><!-- /content -->
+
+<script>
+// ── Panel toggle ───────────────────────────────────────────────────────────
+function togglePanel(id) {
+  const panel = document.getElementById(id);
+  const isOpen = panel.classList.contains('open');
+  // Close all
+  document.querySelectorAll('.detail-panel').forEach(p => p.classList.remove('open'));
+  // Toggle clicked
+  if (!isOpen) panel.classList.add('open');
+}
+
+// ── Mode tabs ─────────────────────────────────────────────────────────────
+function switchMode(group, mode, el) {
+  // Update tabs
+  el.closest('.mode-tabs').querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  // Update content
+  el.closest('.detail-panel').querySelectorAll('.mode-content').forEach(c => c.classList.remove('active'));
+  const target = document.getElementById(group + '-' + mode);
+  if (target) target.classList.add('active');
+}
+
+// ── JSON parser simulator ─────────────────────────────────────────────────
+const examples = {
+  fence: `\`\`\`json
+{
+  "results": [
+    {
+      "doc_id": "US10123456B2",
+      "title": "Battery thermal management system with zigzag cooling channels",
+      "abstract": "A cooling plate using aluminum alloy for uniform battery cell temperature.",
+      "pub_date": "2022-03-15",
+      "url": "https://patents.google.com/patent/US10123456B2",
+      "source": "google_patents"
+    }
+  ]
+}
+\`\`\``,
+
+  plain: `Here are the search results:
+
+{
+  "results": [
+    {
+      "doc_id": "KR10-2021-0123456",
+      "title": "리튬이온 배터리 열관리 장치",
+      "abstract": "Cooling structure for lithium-ion battery cells using thermal pads.",
+      "pub_date": "2021-07-20",
+      "url": "https://patents.google.com/patent/KR20210123456",
+      "source": "google_patents"
+    }
+  ]
+}`,
+
+  truncated: `{
+  "results": [
+    {
+      "doc_id": "US10111111B1",
+      "title": "First complete result",
+      "abstract": "Complete abstract for first patent.",
+      "pub_date": "2020-01-01",
+      "url": "https://patents.google.com/patent/US10111111B1",
+      "source": "google_patents"
+    },
+    {
+      "doc_id": "US10222222B2",
+      "title": "Second complete result",
+      "abstract": "Complete abstract for second patent.",
+      "pub_date": "2019-06-15",
+      "url": "https://patents.google.com/patent/US10222222B2",
+      "source": "google_patents"
+    },
+    {
+      "doc_id": "US10333333B2",
+      "title": "Third result — TRUNCATED HERE
+      "abstract": "This object is incomplete and will be`,
+
+  broken: `I searched Google Patents and found some results about battery thermal management systems but I cannot format them as JSON right now. The search returned approximately 5 relevant patents from 2019-2022 period.`
+};
+
+function loadExample(key) {
+  document.getElementById('jsonInput').value = examples[key];
+  document.getElementById('parseResult').style.display = 'none';
+}
+
+function runParser() {
+  const text = document.getElementById('jsonInput').value;
+  const result = simulateParse(text);
+  const el = document.getElementById('parseResult');
+  el.style.display = 'block';
+  el.innerHTML = result;
+}
+
+function simulateParse(text) {
+  // Step 1: markdown fence
+  const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (fenceMatch) {
+    try {
+      const parsed = JSON.parse(fenceMatch[1]);
+      return renderSuccess(1, '마크다운 코드 펜스 파싱 성공', parsed);
+    } catch(e) {}
+  }
+
+  // Step 2: balanced braces
+  const start = text.indexOf('{');
+  if (start !== -1) {
+    const end = findBalanced(text, start);
+    if (end !== -1) {
+      try {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        return renderSuccess(2, '완전한 JSON 객체 추출 성공', parsed);
+      } catch(e) {}
+    }
+  }
+
+  // Step 3: partial recovery
+  const rPos = text.indexOf('"results"');
+  if (rPos !== -1) {
+    const aStart = text.indexOf('[', rPos);
+    if (aStart !== -1) {
+      const recovered = [];
+      let pos = aStart + 1;
+      while (pos < text.length) {
+        const oStart = text.indexOf('{', pos);
+        if (oStart === -1) break;
+        const oEnd = findBalanced(text, oStart);
+        if (oEnd === -1) break;
+        try {
+          recovered.push(JSON.parse(text.slice(oStart, oEnd + 1)));
+        } catch(e) {}
+        pos = oEnd + 1;
+      }
+      if (recovered.length > 0) {
+        return renderRecovery(recovered);
+      }
+    }
+  }
+
+  // Fail
+  return `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:14px 16px;">
+    <div style="color:var(--g4);font-weight:700;margin-bottom:6px;">✗ 3단계 모두 실패 — [] 반환</div>
+    <div style="font-size:12px;color:var(--dim);">ValueError: 응답에서 JSON을 찾을 수 없습니다.<br>logger.error() 후 빈 리스트 반환. 다른 DB 결과는 유지됩니다.</div>
+  </div>`;
+}
+
+function findBalanced(text, start) {
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function renderSuccess(step, msg, parsed) {
+  const count = parsed.results ? parsed.results.length : '?';
+  const stepColors = ['', 'var(--g1)', 'var(--g5)'];
+  const color = stepColors[step] || 'var(--g2)';
+  let cards = '';
+  if (parsed.results) {
+    parsed.results.slice(0, 3).forEach(r => {
+      cards += `<div class="result-card" style="margin-top:8px;">
+        <div class="rc-field"><span class="rc-key">doc_id</span><span class="rc-value">${r.doc_id || '—'}</span></div>
+        <div class="rc-field"><span class="rc-key">title</span><span class="rc-value" style="color:var(--dim)">${(r.title||'').slice(0,60)}${(r.title||'').length>60?'…':''}</span></div>
+        <div class="rc-field"><span class="rc-key">pub_date</span><span class="rc-value">${r.pub_date || '—'}</span></div>
+        <div class="rc-field"><span class="rc-key">source</span><span class="rc-value">${r.source || 'gemini_search'}</span></div>
+      </div>`;
+    });
+  }
+  return `<div style="background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3);border-radius:8px;padding:14px 16px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <span style="background:rgba(52,211,153,0.2);color:var(--g2);border:1px solid rgba(52,211,153,0.4);padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;">단계 ${step} 성공</span>
+      <span style="font-size:13px;font-weight:600;color:var(--bright)">${msg}</span>
+      <span style="margin-left:auto;font-size:12px;color:var(--g2);">${count}건 추출</span>
+    </div>
+    ${cards}
+  </div>`;
+}
+
+function renderRecovery(recovered) {
+  let cards = '';
+  recovered.slice(0, 3).forEach(r => {
+    cards += `<div class="result-card" style="margin-top:8px;">
+      <div class="rc-field"><span class="rc-key">doc_id</span><span class="rc-value">${r.doc_id || '—'}</span></div>
+      <div class="rc-field"><span class="rc-key">title</span><span class="rc-value" style="color:var(--dim)">${(r.title||'').slice(0,60)}</span></div>
+    </div>`;
+  });
+  return `<div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:14px 16px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <span style="background:rgba(245,158,11,0.2);color:var(--g3);border:1px solid rgba(245,158,11,0.4);padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;">단계 3 — 부분 복구</span>
+      <span style="font-size:13px;font-weight:600;color:var(--bright)">잘린 JSON 복구 성공</span>
+      <span style="margin-left:auto;font-size:12px;color:var(--g3);">${recovered.length}건 복구</span>
+    </div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:8px;">logger.warning("잘린 JSON 부분 복구: ${recovered.length}건") 출력 후 계속 진행</div>
+    ${cards}
+  </div>`;
+}
+
+// Load default example
+loadExample('fence');
+
+// Open first panel by default
+document.getElementById('p1').classList.add('open');
+</script>
+</body>
+</html>

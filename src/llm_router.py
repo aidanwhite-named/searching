@@ -2,8 +2,12 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 from src.config_manager import ConfigManager
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _resolve(name: str) -> str:
@@ -13,7 +17,6 @@ def _resolve(name: str) -> str:
     모듈 로드 시점(서버 기동 시)에 경로를 한 번만 탐색해 캐싱.
     Windows: .cmd 우선 탐색 → 없으면 이름 그대로 반환.
     """
-    # .cmd 확장자 우선 (Windows npm CLI)
     found = shutil.which(name + ".cmd") or shutil.which(name)
     return found or name
 
@@ -32,6 +35,7 @@ class LLMRouter:
         self.agent   = config.get("llm", "agent")
         self.model   = config.get("llm", "model")
         self.api_key = config.get("llm", "api_key", default="") or ""
+        logger.info("LLMRouter 초기화: agent=%s, model=%s, mode=%s", self.agent, self.model, self.mode)
 
     @property
     def mode(self) -> str:
@@ -40,19 +44,28 @@ class LLMRouter:
     # ── 공개 API ──────────────────────────────────────────────────────
 
     def call(self, prompt: str, system: str = None, max_tokens: int = 4096, timeout: int = 120) -> str:
+        logger.debug("LLM 호출 시작 (prompt %d자, max_tokens=%d)", len(prompt), max_tokens)
+        t0 = time.time()
         if self.api_key:
-            return self._call_api(prompt, system, max_tokens)
-        return self._call_cli(prompt, timeout=timeout)
+            result = self._call_api(prompt, system, max_tokens)
+        else:
+            result = self._call_cli(prompt, timeout=timeout)
+        elapsed = time.time() - t0
+        logger.debug("LLM 응답 완료: %.1f초, 응답 %d자", elapsed, len(result))
+        return result
 
     def test_connection(self) -> bool:
+        logger.info("LLM 연결 테스트: %s (%s)", self.agent, self.mode)
         try:
             resp = self.call("Respond with the single word OK and nothing else.")
             ok = "OK" in resp
-            status = "success" if ok else f"failed (response: {resp[:80]})"
-            print(f"[test] {self.agent} ({self.mode}) connection {status}")
+            if ok:
+                logger.info("연결 성공: %s", self.agent)
+            else:
+                logger.warning("연결 실패 — 예상치 못한 응답: %s", resp[:80])
             return ok
         except Exception as e:
-            print(f"[test] connection failed: {e}")
+            logger.error("연결 실패: %s", e)
             return False
 
     # ── API 모드 ──────────────────────────────────────────────────────
@@ -66,6 +79,7 @@ class LLMRouter:
         handler = dispatch.get(self.agent)
         if handler is None:
             raise ValueError(f"API mode not supported for agent: {self.agent}")
+        logger.debug("API 호출: %s", self.agent)
         return handler(prompt, system, max_tokens)
 
     def _claude_api(self, prompt, system, max_tokens):
@@ -132,6 +146,7 @@ class LLMRouter:
 
     def _call_cli(self, prompt: str, timeout: int = 120) -> str:
         cmd, stdin_bytes = self._build_cmd(prompt)
+        logger.debug("CLI 실행: %s (timeout=%ds)", cmd[0], timeout)
 
         # PATH를 현재 프로세스에서 그대로 상속시켜 subprocess에 전달
         env = os.environ.copy()
@@ -156,6 +171,7 @@ class LLMRouter:
         else:
             run_kwargs = {"args": cmd, "shell": False, "env": env, "cwd": cwd}
 
+        t0 = time.time()
         try:
             result = subprocess.run(
                 **run_kwargs,
@@ -168,6 +184,8 @@ class LLMRouter:
                 f"CLI tool '{cmd[0]}' was not found. "
                 f"설치 여부 확인: {self.agent}"
             )
+        elapsed = time.time() - t0
+        logger.debug("CLI 완료: %.1f초, returncode=%d", elapsed, result.returncode)
 
         # Windows 한국어 환경(CP949)·UTF-8 모두 안전하게 디코딩
         def _decode(b: bytes | None) -> str:
@@ -189,5 +207,5 @@ class LLMRouter:
             )
         # 정상 종료인데 stdout이 비어있으면 stderr를 노출 (디버깅용)
         if not stdout.strip() and stderr.strip():
-            print(f"[llm_router] 빈 응답 — stderr: {stderr.strip()[:300]}")
+            logger.warning("빈 응답 — stderr: %s", stderr.strip()[:300])
         return stdout.strip()

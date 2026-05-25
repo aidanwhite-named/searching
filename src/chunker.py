@@ -3,6 +3,10 @@ from dataclasses import dataclass, field
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from providers.base_provider import SearchResult
 from src.claims_parser import ClaimsParser
+from src.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 @dataclass
 class Chunk:
@@ -44,8 +48,8 @@ class Chunker:
         """
         is_patent = result.source in ("kipris", "epo")
         chunks = []
-        
-        # 1. Abstract Chunk (always present if abstract exists)
+
+        # 1. Abstract Chunk
         if result.abstract and result.abstract.strip():
             chunks.append(Chunk(
                 text=result.abstract.strip(),
@@ -59,11 +63,12 @@ class Chunker:
                 ipc_codes=result.ipc_codes,
                 cpc_codes=result.cpc_codes
             ))
-            
+
         if not full_text or not full_text.strip():
+            logger.debug("[%s/%s] 전문 없음 — abstract 청크만 생성", result.source, result.doc_id[:20])
             return chunks
-            
-        # 2. Extract Claims if it is a patent
+
+        # 2. Extract Claims (특허만)
         claims_dict = {}
         if is_patent:
             try:
@@ -72,17 +77,17 @@ class Chunker:
                     nodes = self._parser.parse(claims_sec)
                     for num, node in nodes.items():
                         claims_dict[num] = node
+                    logger.debug("[%s/%s] 청구항 파싱: %d개", result.source, result.doc_id[:20], len(claims_dict))
             except Exception as e:
-                print(f"[warn] Failed to parse claims from patent {result.doc_id}: {e}")
-                
-        # 3. Create Chunks for Claims
+                logger.warning("[%s/%s] 청구항 파싱 실패: %s", result.source, result.doc_id[:20], e)
+
+        # 3. Claim Chunks
         chunk_idx = 1
         if claims_dict:
             for num, node in claims_dict.items():
                 is_ind = node.is_independent
                 ctype = "independent_claim" if is_ind else "claim"
-                
-                # Independent / Claim entire text chunk
+
                 chunks.append(Chunk(
                     text=node.text,
                     doc_id=result.doc_id,
@@ -97,9 +102,8 @@ class Chunker:
                     cpc_codes=result.cpc_codes
                 ))
                 chunk_idx += 1
-                
-                # Split claim text into sub-claims (e.g. claim_1_A, claim_1_B)
-                # Split by delimiters like semicolon (;) or structural keywords
+
+                # Sub-claim 분할 (세미콜론 기준)
                 sub_parts = [p.strip() for p in re.split(r";", node.text) if len(p.strip()) > 30]
                 if len(sub_parts) > 1:
                     for idx, part in enumerate(sub_parts):
@@ -119,16 +123,16 @@ class Chunker:
                             cpc_codes=result.cpc_codes
                         ))
                         chunk_idx += 1
-                        
+
         # 4. Description/Summary Chunks
         desc_text = full_text
         if claims_dict:
-            # Remove claims section from description to avoid duplicate indexing
             claims_sec = self._extract_claims_section(full_text)
             if claims_sec:
                 desc_text = full_text.replace(claims_sec, "")
-                
+
         raw_desc_chunks = self._splitter.split_text(desc_text)
+        desc_count = 0
         for raw in raw_desc_chunks:
             raw = raw.strip()
             if len(raw) < 50:
@@ -146,7 +150,13 @@ class Chunker:
                 cpc_codes=result.cpc_codes
             ))
             chunk_idx += 1
-            
+            desc_count += 1
+
+        logger.debug(
+            "[%s/%s] 청킹 완료: abstract=%d, claims=%d, summary=%d, 합계=%d",
+            result.source, result.doc_id[:20],
+            1 if result.abstract else 0, len(claims_dict), desc_count, len(chunks),
+        )
         return chunks
 
     def chunk_all(self, search_results: list, cache) -> list[Chunk]:
@@ -155,6 +165,9 @@ class Chunker:
         """
         seen: set[str] = set()
         all_chunks: list[Chunk] = []
+
+        total_docs = sum(len(cr.results) for cr in search_results)
+        logger.info("전체 문서 청킹 시작: 청구항별 결과 %d건 (중복 제외)", total_docs)
 
         for claim_result in search_results:
             for result in claim_result.results:
@@ -169,6 +182,7 @@ class Chunker:
                 chunks = self.chunk_document(result, text)
                 all_chunks.extend(chunks)
 
+        logger.info("전체 청킹 완료: 고유 문서 %d개 → %d개 청크", len(seen), len(all_chunks))
         return all_chunks
 
     def _extract_claims_section(self, text: str) -> str:

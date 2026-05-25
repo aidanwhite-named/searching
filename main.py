@@ -13,6 +13,10 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 import json as _json
 
+from src.logger import setup_logging, get_logger
+setup_logging()  # 기본 INFO; build_parser()에서 --log-level/--debug 처리 후 재설정 가능
+logger = get_logger(__name__)
+
 from src.config_manager import ConfigManager
 from src.llm_router import LLMRouter
 from src.patent_preprocessor import PatentPreprocessor
@@ -37,7 +41,6 @@ def cmd_test(args):
     cfg = ConfigManager()
     cfg.show()
     router = LLMRouter(cfg)
-    print(f"[test] 에이전트: {router.agent} / 모드: {router.mode} / 모델: {router.model}")
     success = router.test_connection()
     sys.exit(0 if success else 1)
 
@@ -48,25 +51,23 @@ def cmd_parse(args):
     preprocessor = PatentPreprocessor(router=router)
     parser = ClaimsParser()
 
-    print(f"[parse] PDF 변환 중: {args.pdf}")
+    logger.info("PDF 변환 중: %s", args.pdf)
     data = preprocessor.process(args.pdf)
 
     nodes = parser.parse(data.claims_markdown)
     independent = [n for n in nodes.values() if n.is_independent]
 
-    print("\n=== 특허 파싱 결과 ===")
-    print(f"  발명 명칭  : {data.title or '(추출 실패)'}")
-    print(f"  기준일     : {data.reference_date} ({data.date_type})")
-    print(f"  청구항 수  : {len(nodes)}개 (독립항 {len(independent)}개, 종속항 {len(nodes)-len(independent)}개)")
-    print()
-    print("  의존성 트리:")
-    print(parser.render_tree(nodes))
+    logger.info("=== 특허 파싱 결과 ===")
+    logger.info("  발명 명칭  : %s", data.title or "(추출 실패)")
+    logger.info("  기준일     : %s (%s)", data.reference_date, data.date_type)
+    logger.info("  청구항 수  : %d개 (독립항 %d개, 종속항 %d개)",
+                len(nodes), len(independent), len(nodes) - len(independent))
+    logger.info("  의존성 트리:\n%s", parser.render_tree(nodes))
 
     if args.claims:
-        print("\n  --- 청구범위 원문 ---")
-        print(data.claims_markdown[:2000])
+        logger.info("--- 청구범위 원문 ---\n%s", data.claims_markdown[:2000])
         if len(data.claims_markdown) > 2000:
-            print(f"  ... (이하 생략, 총 {len(data.claims_markdown)}자)")
+            logger.info("  ... (이하 생략, 총 %d자)", len(data.claims_markdown))
 
 
 def cmd_search(args):
@@ -77,10 +78,10 @@ def cmd_search(args):
     pipeline = SearchPipeline(router, cfg)
 
     # PDF 파싱
-    print(f"[search] PDF 변환 중: {args.pdf}")
+    logger.info("PDF 변환 중: %s", args.pdf)
     data = preprocessor.process(args.pdf)
     nodes = claims_parser.parse(data.claims_markdown)
-    print(f"[search] 기준일: {data.reference_date} ({data.date_type}), 청구항: {len(nodes)}개")
+    logger.info("기준일: %s (%s), 청구항: %d개", data.reference_date, data.date_type, len(nodes))
 
     # 대상 청구항 결정
     target = None
@@ -127,7 +128,7 @@ def cmd_search(args):
             }
         with open(args.out, "w", encoding="utf-8") as f:
             _json.dump([_to_dict(cr) for cr in results], f, ensure_ascii=False, indent=2)
-        print(f"\n[search] 결과 저장: {args.out}")
+        logger.info("결과 저장: %s", args.out)
 
 
 def cmd_rag(args):
@@ -139,10 +140,10 @@ def cmd_rag(args):
     rag = RAGPipeline(cfg)
 
     # PDF 파싱
-    print(f"[rag] PDF 변환 중: {args.pdf}")
+    logger.info("PDF 변환 중: %s", args.pdf)
     data = preprocessor.process(args.pdf)
     nodes = claims_parser_obj.parse(data.claims_markdown)
-    print(f"[rag] 청구항: {len(nodes)}개, 기준일: {data.reference_date}")
+    logger.info("청구항: %d개, 기준일: %s", len(nodes), data.reference_date)
 
     # Phase 3 결과 로드 또는 검색 실행
     if args.results:
@@ -168,9 +169,9 @@ def cmd_rag(args):
                                    boolean_query=q["boolean_query"]),
                     results=rs,
                 ))
-            print(f"[rag] Phase 3 결과 로드: {args.results}")
+            logger.info("Phase 3 결과 로드: %s", args.results)
         except Exception as e:
-            print(f"[rag] 결과 파일 로드 실패 ({e}), Phase 3 검색 실행...")
+            logger.warning("결과 파일 로드 실패 (%s), Phase 3 검색 실행...", e)
             search_results = None
     else:
         search_results = None
@@ -194,7 +195,7 @@ def cmd_rag(args):
         force_rebuild=args.rebuild,
     )
     if n_chunks == 0:
-        print("[rag] 인덱싱할 문서가 없습니다.")
+        logger.warning("인덱싱할 문서가 없습니다.")
         return
 
     # 검색 대상 청구항
@@ -226,7 +227,7 @@ def cmd_rag(args):
         with open(args.out, "w", encoding="utf-8") as f:
             _json.dump([_chunk_to_dict(cr) for cr in rag_results], f,
                        ensure_ascii=False, indent=2)
-        print(f"[rag] 결과 저장: {args.out}")
+        logger.info("결과 저장: %s", args.out)
 
 
 def cmd_match(args):
@@ -244,10 +245,10 @@ def cmd_match(args):
     formatter = OutputFormatter()
 
     # ── 1. PDF 파싱 ───────────────────────────────────────────────────────────
-    print(f"[match] PDF 변환 중: {args.pdf}")
+    logger.info("PDF 변환 중: %s", args.pdf)
     data = preprocessor.process(args.pdf)
     nodes = claims_parser_obj.parse(data.claims_markdown)
-    print(f"[match] 청구항: {len(nodes)}개, 기준일: {data.reference_date}")
+    logger.info("청구항: %d개, 기준일: %s", len(nodes), data.reference_date)
 
     # ── 2. RAG 결과 로드 또는 전체 파이프라인 실행 ──────────────────────────
     if args.rag_results:
@@ -269,9 +270,9 @@ def cmd_match(args):
                     for c in item["top_chunks"]
                 ]
                 rag_results.append(RAGClaimResult(claim_number=item["claim_number"], top_chunks=chunks))
-            print(f"[match] RAG 결과 로드: {args.rag_results}")
+            logger.info("RAG 결과 로드: %s", args.rag_results)
         except Exception as e:
-            print(f"[match] RAG 결과 로드 실패 ({e}), 전체 파이프라인 실행...")
+            logger.warning("RAG 결과 로드 실패 (%s), 전체 파이프라인 실행...", e)
             rag_results = None
     else:
         rag_results = None
@@ -287,26 +288,26 @@ def cmd_match(args):
         )
         n_chunks = rag.build_index(search_results, cache)
         if n_chunks == 0:
-            print("[match] 인덱싱할 문서가 없습니다. 종료.")
+            logger.warning("인덱싱할 문서가 없습니다. 종료.")
             return
         # 전체 청구항 검색: 종속항 covers_claims가 있어야 재사용 로직이 작동함
         all_claim_nums = sorted(nodes.keys())
         rag_results = rag.search(nodes, all_claim_nums, top_k=10)
 
     # ── 3. 매칭 알고리즘 ─────────────────────────────────────────────────────
-    print(f"\n[match] 매칭 알고리즘 실행 (tolerance={args.tolerance}, max_refs={args.max_refs})...")
+    logger.info("매칭 알고리즘 실행 (tolerance=%.2f, max_refs=%d)...", args.tolerance, args.max_refs)
     claim_matches = matcher.match(nodes, rag_results)
 
     # ── 4. 할루시네이션 검증 (--no-llm 아닐 때) ────────────────────────────
     if not args.no_llm:
-        print("[match] LLM 단락 추출 & 검증 중...")
+        logger.info("LLM 단락 추출 & 검증 중...")
         for cm in claim_matches:
             refs_to_check = ([cm.primary_ref] if cm.primary_ref else []) + cm.secondary_refs
             for dm in refs_to_check:
                 if not dm.matched_paragraph:
                     claim_node = nodes.get(cm.claim_number)
                     if claim_node:
-                        print(f"  청구항 {cm.claim_number} ← {dm.doc_id} 검증 중...")
+                        logger.info("  청구항 %d ← %s 검증 중...", cm.claim_number, dm.doc_id)
                         para, verified = checker.find_and_verify(
                             cm.claim_number, claim_node.text, dm, router, cache
                         )
@@ -324,7 +325,7 @@ def cmd_match(args):
         else:
             content = formatter.to_json(data, claim_matches, nodes)
         formatter.save(content, out_path)
-        print(f"\n[match] 결과 저장: {out_path} ({fmt})")
+        logger.info("결과 저장: %s (%s)", out_path, fmt)
     else:
         # stdout 출력
         if fmt == "csv":
@@ -338,6 +339,13 @@ def build_parser() -> argparse.ArgumentParser:
         prog="patent-search",
         description="특허 선행기술조사 및 거절논리 매칭 CLI 시스템",
     )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="로그 레벨 (기본: INFO)",
+    )
+    parser.add_argument("--debug", action="store_true", help="DEBUG 로그 레벨 활성화")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # config
@@ -408,6 +416,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    # 로그 레벨 재설정 (setup_logging()은 한 번만 실행되므로 핸들러 직접 조정)
+    import logging as _logging
+    level = "DEBUG" if args.debug else args.log_level
+    _logging.getLogger().setLevel(getattr(_logging, level))
     args.func(args)
 
 

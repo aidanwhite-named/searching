@@ -3,10 +3,13 @@ EPO OPS Provider — python-epo-ops-client 기반
 토큰 갱신·쓰로틀링·재시도를 라이브러리가 자동 처리.
 """
 
+import logging
 import os
 import re
 import xml.etree.ElementTree as ET
 from providers.base_provider import BaseProvider, SearchResult
+
+logger = logging.getLogger(__name__)
 
 
 class EpoProvider(BaseProvider):
@@ -22,22 +25,19 @@ class EpoProvider(BaseProvider):
         try:
             import epo_ops
         except ImportError:
-            raise ImportError(
-                "pip install python-epo-ops-client  # EPO OPS 라이브러리 누락"
-            )
+            raise ImportError("pip install python-epo-ops-client  # EPO OPS 라이브러리 누락")
         if not self.key or not self.secret:
             raise ValueError(
                 "EPO OPS 키·시크릿이 없습니다. "
                 "config.yaml의 search.epo_ops_key / epo_ops_secret 를 입력하세요."
             )
-        # middlewares: 토큰 자동 갱신 + 요청 쓰로틀링
         self._client = epo_ops.Client(
             key=self.key,
             secret=self.secret,
             accept_type="xml",
             middlewares=[
                 epo_ops.middlewares.Throttler(),
-                epo_ops.middlewares.Dogpile(),   # 응답 캐싱
+                epo_ops.middlewares.Dogpile(),
             ],
         )
         return self._client
@@ -47,42 +47,39 @@ class EpoProvider(BaseProvider):
         if not query:
             return []
         if not self.key or not self.secret:
-            print("[epo] 키·시크릿 미설정 — EPO 검색 건너뜀.")
+            logger.warning("EPO 키·시크릿 미설정 — EPO 검색 건너뜀")
             return []
 
         try:
             client = self._get_client()
         except (ImportError, ValueError) as e:
-            print(f"[epo] {e}")
+            logger.error("EPO 클라이언트 초기화 실패: %s", e)
             return []
 
-        # CQL 쿼리 구성 (cut-off 날짜 필터 포함)
         safe_q  = query.replace('"', "").strip()
         cql     = f'txt="{safe_q}"'
         if cutoff_date:
-            # EPO CQL 날짜 형식: YYYYMMDD
             date_str = cutoff_date[:10].replace("-", "")
             cql += f" AND pd<{date_str}"
 
+        logger.debug("EPO CQL: %s", cql[:80])
         range_end = max(limit, 1)
         try:
-            resp = client.published_data_search(
-                cql=cql,
-                range_begin=1,
-                range_end=range_end,
-            )
+            resp = client.published_data_search(cql=cql, range_begin=1, range_end=range_end)
         except Exception as e:
-            print(f"[epo] 검색 실패: {e}")
+            logger.error("EPO 검색 실패: %s", e)
             return []
 
-        return self._parse_xml(resp.text, cutoff_date)
+        results = self._parse_xml(resp.text, cutoff_date)
+        logger.info("EPO 결과: %d건 (cutoff=%s)", len(results), cutoff_date)
+        return results
 
     # ── XML 파싱 ──────────────────────────────────────────────────────
     def _parse_xml(self, raw: str, cutoff_date: str) -> list[SearchResult]:
         try:
             root = ET.fromstring(raw)
         except ET.ParseError as e:
-            print(f"[epo] XML 파싱 오류: {e}")
+            logger.error("EPO XML 파싱 오류: %s", e)
             return []
 
         def first(element, suffix):
@@ -100,7 +97,6 @@ class EpoProvider(BaseProvider):
             if biblio is None:
                 continue
 
-            # ─ 문서 ID & 출판일 ─
             pub_ref = first(biblio, "publication-reference")
             doc_id, pub_date = "", "unknown"
             if pub_ref is not None:
@@ -121,15 +117,12 @@ class EpoProvider(BaseProvider):
 
             if not doc_id:
                 continue
-            # cut-off 날짜 이후 문헌 제외
             if pub_date != "unknown" and cutoff_date and pub_date[:10] >= cutoff_date[:10]:
                 continue
 
-            # ─ 제목 ─
             title_el = first(biblio, "invention-title")
             title = title_el.text.strip() if title_el is not None and title_el.text else "Unknown Title"
 
-            # ─ 초록 ─
             abstract_el = first(biblio, "abstract")
             abstract = ""
             if abstract_el is not None:
@@ -139,7 +132,6 @@ class EpoProvider(BaseProvider):
                     if p.tag.endswith("p") and p.text
                 )
 
-            # ─ IPC 분류코드 ─
             ipc_codes = []
             for ipcr in biblio.iter():
                 if not ipcr.tag.endswith("classification-ipcr"):

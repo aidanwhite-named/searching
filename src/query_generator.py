@@ -2,6 +2,9 @@ import json
 import re
 from dataclasses import dataclass, field
 from src.llm_router import LLMRouter
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -37,11 +40,9 @@ JSON 형식으로만 응답하세요 (설명 없이 JSON만):
 
 def _extract_json(text: str) -> dict:
     """LLM 응답에서 JSON 객체 추출. 코드블록 및 날 JSON 모두 처리."""
-    # ```json ... ``` 블록
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if m:
         return json.loads(m.group(1))
-    # 중첩 중괄호 추적으로 JSON 경계 탐색
     start = text.find("{")
     if start != -1:
         depth = 0
@@ -60,13 +61,16 @@ class QueryGenerator:
         self.router = router
 
     def generate(self, claim_number: int, claim_text: str, reference_date: str) -> QuerySpec:
+        logger.debug("쿼리 생성 요청: 청구항 %d (%d자)", claim_number, len(claim_text))
         prompt = _PROMPT.format(
             reference_date=reference_date,
             claim_number=claim_number,
             claim_text=claim_text,
         )
         response = self.router.call(prompt, system=_SYSTEM, max_tokens=1024)
-        return self._parse(response, claim_number)
+        spec = self._parse(response, claim_number)
+        logger.debug("쿼리 생성 결과: keywords=%s, cpc=%s", spec.keywords, spec.cpc_codes)
+        return spec
 
     def _parse(self, response: str, claim_number: int) -> QuerySpec:
         try:
@@ -79,6 +83,6 @@ class QueryGenerator:
                 boolean_query=data.get("boolean_query", ""),
             )
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"[warn] 쿼리 파싱 실패 (청구항 {claim_number}): {e}")
-            print(f"       응답 앞부분: {response[:300]}")
+            logger.warning("쿼리 파싱 실패 (청구항 %d): %s", claim_number, e)
+            logger.debug("파싱 실패 응답 앞부분: %s", response[:300])
             return QuerySpec(claim_number=claim_number)
